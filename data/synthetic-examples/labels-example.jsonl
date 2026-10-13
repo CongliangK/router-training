@@ -1,0 +1,3 @@
+{"id": "synthex-task-0001", "tier": "fast", "task_type": "extraction", "needs_vision": "no", "confidence": 0.9, "rationale": "按列聚合统计并输出表格，模板化机械操作，几乎不需推理。", "label_source": "expert_provisional", "evidence": "prompt_only"}
+{"id": "synthex-task-0002", "tier": "flagship", "task_type": "implementation", "needs_vision": "no", "confidence": 0.75, "rationale": "属第1种架构设计：跨模块系统级拆分，多合理方案需权衡取舍。", "label_source": "expert_provisional", "evidence": "prompt_only"}
+{"id": "synthex-task-0003", "tier": "balanced", "task_type": "visual", "needs_vision": "yes", "confidence": 0.85, "rationale": "明确要求逐个打开图片肉眼比对且禁止哈希替代，必须理解实际像素。", "label_source": "expert_provisional", "evidence": "prompt_only"}

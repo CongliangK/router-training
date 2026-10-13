@@ -1,0 +1,32 @@
+{
+  "temperatures": {
+    "tier": 3.5,
+    "vision": 1.5,
+    "task_type": 1
+  },
+  "tier_adjust": {
+    "fast": -4.570496346681537,
+    "balanced": -0.5282292060957358,
+    "flagship": -4.074824018872375
+  },
+  "tier_adjust_tau": 2.0,
+  "tier_prior": {
+    "fast": 0.10174880763116058,
+    "balanced": 0.7678855325914149,
+    "flagship": 0.13036565977742448
+  },
+  "notes": {
+    "tier": {
+      "nll": 0.6052410538472275,
+      "rows": 135
+    },
+    "vision": {
+      "nll": 0.13745041598751698,
+      "rows": 131
+    },
+    "task_type": {
+      "nll": 0.741992557914905,
+      "rows": 135
+    }
+  }
+}

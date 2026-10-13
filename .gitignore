@@ -1,0 +1,22 @@
+# Runtime and caches
+.venv/
+__pycache__/
+*.py[cod]
+.cache/
+observations/
+.env
+.env.*
+# Large model weights stay local; metadata/tokenizers/licenses are versioned.
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+# Generated predictions and logs may contain private prompts.
+artifacts/**/*.jsonl
+logs/
+# Temporary files
+*.tmp
+# Never commit a public export inside this private repo; use scripts/export_public.sh
+router-training-public/
+

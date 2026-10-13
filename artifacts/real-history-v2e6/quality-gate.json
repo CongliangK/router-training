@@ -1,0 +1,9 @@
+{
+  "passed": false,
+  "mode": "shadow",
+  "reasons": [
+    "No independent candidate-model task-success benchmark has been collected.",
+    "Flagship under-routing exceeds 5%.",
+    "Vision false-negative rate exceeds 5%."
+  ]
+}

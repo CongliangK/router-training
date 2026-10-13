@@ -1,0 +1,123 @@
+{
+  "seed": 20261010,
+  "label_basis": "new expert hints; no candidate-model execution evidence",
+  "near_duplicate_threshold": 0.88,
+  "cross_root_near_duplicate_edges": 0,
+  "independent_groups": 37,
+  "splits": {
+    "train": {
+      "rows": 469,
+      "groups": [
+        "0515e6e29d9ae4a29dd6",
+        "10bfb4d01cc8344be90e",
+        "1cc373ffd4261a1e181b",
+        "30facc94cd88eeea58c2",
+        "389cc42d8bbc819f4301",
+        "44065d7c32e035b49e7e",
+        "4a82015e6b0379313043",
+        "5111a4a0a61d1be78661",
+        "542d6c39bf70fbcdc80a",
+        "5a9fb93794a804359b40",
+        "739342ed1b9c9a2ba26d",
+        "7d3070f84a37c329e97c",
+        "8462f3c30b2abe6cfbcd",
+        "b0859766044a190ae162",
+        "c2fd408fc8e722da637b",
+        "c4f658875c1e757dcbbb",
+        "c5b10350112dc92dd38e",
+        "de89149b0ecbdba8f95e",
+        "e014138b4b45bc71362c",
+        "e11bfce1030c3b667618",
+        "e6893d99e563c9688280",
+        "e89934701781976c3731"
+      ],
+      "tiers": {
+        "balanced": 358,
+        "flagship": 67,
+        "fast": 44
+      },
+      "vision": {
+        "no": 464,
+        "yes": 4,
+        "uncertain": 1
+      },
+      "task_types": {
+        "review": 133,
+        "implementation": 95,
+        "extraction": 51,
+        "creative": 151,
+        "research": 26,
+        "debugging": 12,
+        "visual": 1
+      }
+    },
+    "calibration": {
+      "rows": 95,
+      "groups": [
+        "1fa198393166158b89ed",
+        "2eab1dda4129536c2a7a",
+        "46bb51fa3ff29ffe4c12",
+        "838f7266b83f14d4d1c5",
+        "88d0a7082474b51478de",
+        "bd224a32dd1eedfaf1c2",
+        "e141251146573d8dfe8e",
+        "f6baa66748160e958eec"
+      ],
+      "tiers": {
+        "balanced": 74,
+        "flagship": 15,
+        "fast": 6
+      },
+      "vision": {
+        "no": 91,
+        "yes": 2,
+        "uncertain": 2
+      },
+      "task_types": {
+        "implementation": 34,
+        "review": 23,
+        "debugging": 1,
+        "research": 22,
+        "extraction": 6,
+        "creative": 9
+      }
+    },
+    "test": {
+      "rows": 104,
+      "groups": [
+        "0192d797126326b3fd35",
+        "078dbf2e882ceb0b2835",
+        "1cbebd8176deafaf7b08",
+        "427689b6ac4249bfd784",
+        "6843b0112e7456834f1a",
+        "c023e8c9038bf6144b52",
+        "ec267d5631d2c02a7722"
+      ],
+      "tiers": {
+        "flagship": 30,
+        "balanced": 72,
+        "fast": 2
+      },
+      "vision": {
+        "yes": 74,
+        "no": 27,
+        "uncertain": 3
+      },
+      "task_types": {
+        "review": 36,
+        "implementation": 34,
+        "creative": 16,
+        "research": 11,
+        "debugging": 5,
+        "extraction": 2
+      }
+    }
+  },
+  "dataset_sha256": "d6df301b1115303879a2f30e1b26d53eac94ae9a548a5fd06ad648b4806cb0eb",
+  "group_disjoint": true,
+  "historical_model_labels_used": false,
+  "limitations": [
+    "Only two independent roots contain vision-positive tasks; visual confidence calibration is not supported by a fully independent third root.",
+    "Expert imitation metrics do not establish candidate-model task success."
+  ]
+}

@@ -1,0 +1,33 @@
+router-training
+Copyright 2026 router-training contributors
+
+This product includes software developed by the router-training contributors
+(License: Apache-2.0, see LICENSE).
+
+==============================================================================
+Third-party components
+==============================================================================
+
+1. Intern-Decision-0.8B base model
+   Upstream: https://huggingface.co/internlm/Intern-Decision-0.8B
+   Copyright 2026 Shanghai AI Laboratory
+   License: Apache-2.0 (see models/intern-decision-0.8b/LICENSE and
+   models/intern-decision-0.8b/LICENSE-QWEN in a full local checkout).
+   The repository code loads this model as the training base. Model weight
+   files (*.safetensors) are NOT distributed in this repository; users
+   download the pinned upstream revision themselves.
+
+2. Python dependencies (torch, transformers, peft, accelerate, fastapi, etc.)
+   Each distributed under its own license; see requirements.txt for the
+   exact pinned versions.
+
+==============================================================================
+Data notice
+==============================================================================
+
+This repository does NOT distribute the real task prompts and expert labels
+used to train the archived checkpoints. See docs/DATA.md for the data schema,
+synthetic format examples, and how to build your own dataset.
+
+Fine-tuned checkpoints derived from the base model inherit the upstream
+Apache-2.0 obligations when redistributed.

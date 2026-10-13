@@ -1,0 +1,9 @@
+{
+  "selection": "soup",
+  "epochs": [
+    1,
+    2,
+    3
+  ],
+  "calibration_macro_f1": 0.27499999999999997
+}

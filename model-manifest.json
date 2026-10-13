@@ -1,0 +1,6 @@
+{
+  "model": "internlm/Intern-Decision-0.8B",
+  "revision": "85a0cc5a99d67ea8d56dfe98115689212867171d",
+  "path": "models/intern-decision-0.8b",
+  "trust_remote_code": false
+}

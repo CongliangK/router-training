@@ -1,0 +1,15 @@
+{
+  "temperatures": {
+    "tier": 1,
+    "vision": 2.747760550703,
+    "task_type": 2.747760550703
+  },
+  "notes": {
+    "tier": {
+      "nll": 0.11650784482721954,
+      "rows": 70
+    },
+    "vision": "missing classes; retained checkpoint temperature (not locally calibrated)",
+    "task_type": "missing classes; retained checkpoint temperature (not locally calibrated)"
+  }
+}

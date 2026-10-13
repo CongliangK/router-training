@@ -1,0 +1,74 @@
+{
+  "live_framework_metadata": [
+    {
+      "provider": "openai-codex",
+      "model": "gpt-6.1-sol",
+      "resolvedInputModalities": [
+        "text",
+        "image"
+      ],
+      "advertisedInputModalities": [
+        "text",
+        "image"
+      ],
+      "advertised": true
+    },
+    {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3-flash",
+      "resolvedInputModalities": [
+        "text",
+        "image"
+      ],
+      "advertisedInputModalities": [
+        "text",
+        "image"
+      ],
+      "advertised": true
+    }
+  ],
+  "live_visual_route_checks": [
+    {
+      "schema_version": 1,
+      "mode": "shadow",
+      "quality_gate_passed": false,
+      "run": "real-history-v1",
+      "tier": "fast",
+      "tier_confidence": 0.590829074382782,
+      "vision_probability": 0.9360761642456055,
+      "task_type": "visual",
+      "context_truncated": false,
+      "recommendation": {
+        "provider": "openai-codex",
+        "model": "gpt-6.1-sol"
+      },
+      "needs_vision": true,
+      "required_tier": "flagship",
+      "reasons": [
+        "low-confidence-or-truncated-context"
+      ],
+      "latency_ms": 431.21
+    },
+    {
+      "schema_version": 1,
+      "mode": "shadow",
+      "quality_gate_passed": false,
+      "run": "real-history-v1",
+      "tier": "flagship",
+      "tier_confidence": 0.9939670562744141,
+      "vision_probability": 0.9304109811782837,
+      "task_type": "visual",
+      "context_truncated": false,
+      "recommendation": {
+        "provider": "openai-codex",
+        "model": "gpt-6.1-sol"
+      },
+      "needs_vision": true,
+      "required_tier": "flagship",
+      "reasons": [],
+      "latency_ms": 64.44
+    }
+  ],
+  "cloud_generation_executed": false,
+  "parent_images_automatically_forwarded": false
+}

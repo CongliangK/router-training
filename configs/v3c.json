@@ -1,0 +1,20 @@
+{
+  "description": "Exact CLI recipe for the completed real-history-v3c run; no algorithm changes",
+  "run": "real-history-v3c",
+  "epochs": 6,
+  "rank": 8,
+  "lr": 0.0001,
+  "accumulation": 8,
+  "seed": 20261010,
+  "synth": true,
+  "beta": 0.999,
+  "mlp": false,
+  "fullft": true,
+  "label_smoothing": 0.05,
+  "swa": true,
+  "smoke": false,
+  "effective_fullft_initial_lr": 0.000002,
+  "frozen_parameter_name_fragments": ["visual", "projector", "lm_head", "embed_tokens"],
+  "context_max_length": 8192,
+  "prompt_token_budget": 7700
+}

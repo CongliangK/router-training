@@ -1,0 +1,407 @@
+{
+  "run": "real-history-v1",
+  "seed": 20261010,
+  "base_model": {
+    "model": "internlm/Intern-Decision-0.8B",
+    "revision": "85a0cc5a99d67ea8d56dfe98115689212867171d",
+    "path": "/upstream-router-framework/models/intern-decision-0.8b",
+    "trust_remote_code": false
+  },
+  "training": {
+    "epochs": 2,
+    "rank": 8,
+    "lr": 0.0001,
+    "accumulation": 8,
+    "trainable_parameters": 1794048,
+    "optimizer_updates": 84,
+    "seconds": 489.42176617099994,
+    "history": [
+      {
+        "epoch": 1,
+        "train_loss": 0.9059692121770893,
+        "calibration_tier_nll": 0.11510441811933177
+      },
+      {
+        "epoch": 2,
+        "train_loss": 0.436495923369007,
+        "calibration_tier_nll": 0.3374211106755804
+      }
+    ]
+  },
+  "evaluation_basis": "agreement with fresh expert prompt-only labels; NOT real generation task success",
+  "baseline": {
+    "rows": 65,
+    "context_truncated": 0,
+    "mean_latency_ms": 70.36074986149637,
+    "tier": {
+      "evaluated_rows": 65,
+      "accuracy": 0.8153846153846154,
+      "nll": 0.5450127533869765,
+      "brier": 0.3004450528809504,
+      "ece_5_bins": 0.06110192262209385,
+      "confusion": {
+        "fast": {
+          "fast": 0,
+          "balanced": 3,
+          "flagship": 0
+        },
+        "balanced": {
+          "fast": 0,
+          "balanced": 44,
+          "flagship": 0
+        },
+        "flagship": {
+          "fast": 0,
+          "balanced": 9,
+          "flagship": 9
+        }
+      }
+    },
+    "vision": {
+      "evaluated_rows": 63,
+      "accuracy": 0.9047619047619048,
+      "nll": 0.44245668468820576,
+      "brier": 0.2630002698102902,
+      "ece_5_bins": 0.24528443529492333,
+      "confusion": {
+        "no": {
+          "no": 54,
+          "yes": 3
+        },
+        "yes": {
+          "no": 3,
+          "yes": 3
+        }
+      }
+    },
+    "task_type": {
+      "evaluated_rows": 65,
+      "accuracy": 0.6153846153846154,
+      "nll": 1.2078017666178256,
+      "brier": 0.5666418020345942,
+      "ece_5_bins": 0.1707526466021171,
+      "confusion": {
+        "extraction": {
+          "extraction": 2,
+          "research": 2,
+          "implementation": 0,
+          "debugging": 0,
+          "review": 0,
+          "visual": 0,
+          "creative": 0
+        },
+        "research": {
+          "extraction": 1,
+          "research": 18,
+          "implementation": 0,
+          "debugging": 0,
+          "review": 0,
+          "visual": 0,
+          "creative": 0
+        },
+        "implementation": {
+          "extraction": 0,
+          "research": 0,
+          "implementation": 7,
+          "debugging": 0,
+          "review": 5,
+          "visual": 0,
+          "creative": 0
+        },
+        "debugging": {
+          "extraction": 0,
+          "research": 0,
+          "implementation": 2,
+          "debugging": 0,
+          "review": 0,
+          "visual": 0,
+          "creative": 0
+        },
+        "review": {
+          "extraction": 0,
+          "research": 2,
+          "implementation": 0,
+          "debugging": 2,
+          "review": 13,
+          "visual": 1,
+          "creative": 0
+        },
+        "visual": {
+          "extraction": 0,
+          "research": 0,
+          "implementation": 0,
+          "debugging": 0,
+          "review": 0,
+          "visual": 0,
+          "creative": 0
+        },
+        "creative": {
+          "extraction": 0,
+          "research": 1,
+          "implementation": 2,
+          "debugging": 0,
+          "review": 7,
+          "visual": 0,
+          "creative": 0
+        }
+      }
+    },
+    "flagship_underroute_rate": 0.5,
+    "vision_false_negative_rate": 0.5,
+    "flagship_examples": 18,
+    "vision_positive_examples": 6
+  },
+  "finetuned": {
+    "rows": 65,
+    "context_truncated": 0,
+    "mean_latency_ms": 74.76605706160626,
+    "tier": {
+      "evaluated_rows": 65,
+      "accuracy": 0.8923076923076924,
+      "nll": 0.46926735266678077,
+      "brier": 0.23509253683189635,
+      "ece_5_bins": 0.0934911466561831,
+      "confusion": {
+        "fast": {
+          "fast": 1,
+          "balanced": 2,
+          "flagship": 0
+        },
+        "balanced": {
+          "fast": 0,
+          "balanced": 42,
+          "flagship": 2
+        },
+        "flagship": {
+          "fast": 0,
+          "balanced": 3,
+          "flagship": 15
+        }
+      }
+    },
+    "vision": {
+      "evaluated_rows": 63,
+      "accuracy": 0.9365079365079365,
+      "nll": 0.17303905214968898,
+      "brier": 0.08576714928661905,
+      "ece_5_bins": 0.06178503187875897,
+      "confusion": {
+        "no": {
+          "no": 55,
+          "yes": 2
+        },
+        "yes": {
+          "no": 2,
+          "yes": 4
+        }
+      }
+    },
+    "task_type": {
+      "evaluated_rows": 65,
+      "accuracy": 0.6461538461538462,
+      "nll": 1.140271912935043,
+      "brier": 0.5473375928010176,
+      "ece_5_bins": 0.23117461640101214,
+      "confusion": {
+        "extraction": {
+          "extraction": 1,
+          "research": 2,
+          "implementation": 0,
+          "debugging": 0,
+          "review": 0,
+          "visual": 0,
+          "creative": 1
+        },
+        "research": {
+          "extraction": 1,
+          "research": 16,
+          "implementation": 0,
+          "debugging": 0,
+          "review": 0,
+          "visual": 0,
+          "creative": 2
+        },
+        "implementation": {
+          "extraction": 0,
+          "research": 0,
+          "implementation": 2,
+          "debugging": 0,
+          "review": 9,
+          "visual": 1,
+          "creative": 0
+        },
+        "debugging": {
+          "extraction": 0,
+          "research": 0,
+          "implementation": 0,
+          "debugging": 2,
+          "review": 0,
+          "visual": 0,
+          "creative": 0
+        },
+        "review": {
+          "extraction": 0,
+          "research": 2,
+          "implementation": 0,
+          "debugging": 1,
+          "review": 14,
+          "visual": 1,
+          "creative": 0
+        },
+        "visual": {
+          "extraction": 0,
+          "research": 0,
+          "implementation": 0,
+          "debugging": 0,
+          "review": 0,
+          "visual": 0,
+          "creative": 0
+        },
+        "creative": {
+          "extraction": 0,
+          "research": 0,
+          "implementation": 0,
+          "debugging": 0,
+          "review": 3,
+          "visual": 0,
+          "creative": 7
+        }
+      }
+    },
+    "flagship_underroute_rate": 0.16666666666666666,
+    "vision_false_negative_rate": 0.3333333333333333,
+    "flagship_examples": 18,
+    "vision_positive_examples": 6
+  },
+  "baseline_temperatures": {
+    "tier": 1,
+    "vision": 2.747760550703,
+    "task_type": 2.747760550703
+  },
+  "baseline_calibration_notes": {
+    "tier": {
+      "nll": 0.1808714492757265,
+      "rows": 70
+    },
+    "vision": "missing classes; retained checkpoint temperature (not locally calibrated)",
+    "task_type": "missing classes; retained checkpoint temperature (not locally calibrated)"
+  },
+  "temperatures": {
+    "tier": 1,
+    "vision": 2.747760550703,
+    "task_type": 2.747760550703
+  },
+  "calibration_notes": {
+    "tier": {
+      "nll": 0.11650784482721954,
+      "rows": 70
+    },
+    "vision": "missing classes; retained checkpoint temperature (not locally calibrated)",
+    "task_type": "missing classes; retained checkpoint temperature (not locally calibrated)"
+  },
+  "quality_gate": {
+    "passed": false,
+    "mode": "shadow",
+    "reasons": [
+      "No independent candidate-model task-success benchmark has been collected.",
+      "Fewer than 30 independent flagship test examples.",
+      "Fewer than 20 independent vision-positive test examples.",
+      "Flagship under-routing exceeds 5%.",
+      "Vision false-negative rate exceeds 5%."
+    ]
+  },
+  "split_report": {
+    "seed": 20261010,
+    "label_basis": "new expert hints; no candidate-model execution evidence",
+    "near_duplicate_threshold": 0.88,
+    "cross_root_near_duplicate_edges": 0,
+    "independent_groups": 13,
+    "splits": {
+      "train": {
+        "rows": 333,
+        "groups": [
+          "10bfb4d01cc8344be90e",
+          "1cc373ffd4261a1e181b",
+          "44065d7c32e035b49e7e",
+          "542d6c39bf70fbcdc80a",
+          "e014138b4b45bc71362c",
+          "e89934701781976c3731",
+          "ec267d5631d2c02a7722"
+        ],
+        "tiers": {
+          "flagship": 125,
+          "balanced": 186,
+          "fast": 22
+        },
+        "vision": {
+          "yes": 74,
+          "no": 259
+        },
+        "task_types": {
+          "review": 134,
+          "visual": 4,
+          "extraction": 20,
+          "implementation": 43,
+          "creative": 81,
+          "research": 15,
+          "debugging": 36
+        }
+      },
+      "calibration": {
+        "rows": 70,
+        "groups": [
+          "46bb51fa3ff29ffe4c12",
+          "c2fd408fc8e722da637b",
+          "f6baa66748160e958eec"
+        ],
+        "tiers": {
+          "balanced": 65,
+          "fast": 3,
+          "flagship": 2
+        },
+        "vision": {
+          "no": 70
+        },
+        "task_types": {
+          "creative": 62,
+          "research": 3,
+          "review": 2,
+          "extraction": 3
+        }
+      },
+      "test": {
+        "rows": 65,
+        "groups": [
+          "0192d797126326b3fd35",
+          "1fa198393166158b89ed",
+          "838f7266b83f14d4d1c5"
+        ],
+        "tiers": {
+          "balanced": 44,
+          "fast": 3,
+          "flagship": 18
+        },
+        "vision": {
+          "no": 57,
+          "uncertain": 2,
+          "yes": 6
+        },
+        "task_types": {
+          "research": 19,
+          "extraction": 4,
+          "implementation": 12,
+          "creative": 10,
+          "review": 18,
+          "debugging": 2
+        }
+      }
+    },
+    "dataset_sha256": "95b4d21fecfd1bda6247feb16c82583a85c12f27facaebee4308103b203f4d3f",
+    "group_disjoint": true,
+    "historical_model_labels_used": false,
+    "limitations": [
+      "Only two independent roots contain vision-positive tasks; visual confidence calibration is not supported by a fully independent third root.",
+      "Expert imitation metrics do not establish candidate-model task success."
+    ]
+  }
+}

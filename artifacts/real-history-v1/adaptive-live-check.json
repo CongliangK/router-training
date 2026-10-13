@@ -1,0 +1,540 @@
+{
+  "checkedAt": "2026-10-10T04:46:48.485Z",
+  "metadata": [
+    {
+      "provider": "openai-codex",
+      "model": "gpt-6.1-sol",
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "reasoning": {
+        "efforts": [
+          {
+            "id": "minimal",
+            "name": "Minimal"
+          },
+          {
+            "id": "low",
+            "name": "Low"
+          },
+          {
+            "id": "medium",
+            "name": "Medium"
+          },
+          {
+            "id": "high",
+            "name": "High"
+          },
+          {
+            "id": "xhigh",
+            "name": "Xhigh"
+          },
+          {
+            "id": "max",
+            "name": "Max"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "inputModalities": [
+        "text"
+      ],
+      "reasoning": {
+        "efforts": [
+          {
+            "id": "low",
+            "name": "Low"
+          },
+          {
+            "id": "high",
+            "name": "High"
+          },
+          {
+            "id": "max",
+            "name": "Max"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3-flash",
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "reasoning": {
+        "efforts": [
+          {
+            "id": "low",
+            "name": "Low"
+          },
+          {
+            "id": "high",
+            "name": "High"
+          },
+          {
+            "id": "max",
+            "name": "Max"
+          }
+        ]
+      }
+    }
+  ],
+  "inventory": [
+    {
+      "id": "user-mode",
+      "name": "用户模式",
+      "description": "基于标准模式，普通子智能体实验性联合选择模型与思考强度，实时复核能力，保留旗舰回退和显式选择；fork 继承父模型。",
+      "isDefault": false,
+      "rows": [
+        {
+          "entryId": "persona",
+          "moduleName": "@deepseek-ai/dsh-persona",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "agent-instructions",
+          "moduleName": "@deepseek-ai/dsh-agent-instructions",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "time-context",
+          "moduleName": "@deepseek-ai/dsh-time-context",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "tool-bash",
+          "moduleName": "@deepseek-ai/dsh-tool-bash",
+          "enabled": true,
+          "condition": "process.platform === 'win32'",
+          "fiberState": 2
+        },
+        {
+          "entryId": "tool-pwsh",
+          "moduleName": "@deepseek-ai/dsh-tool-pwsh",
+          "enabled": false,
+          "condition": "process.platform !== 'win32'"
+        },
+        {
+          "entryId": "tool-fs",
+          "moduleName": "@deepseek-ai/dsh-tool-fs",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "tool-fs-search",
+          "moduleName": "@deepseek-ai/dsh-tool-fs-search",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "tool-jobs",
+          "moduleName": "@deepseek-ai/dsh-tool-jobs",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "tool-schedule",
+          "moduleName": "@deepseek-ai/dsh-tool-schedule",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "skill-filesystem",
+          "moduleName": "@deepseek-ai/dsh-skill-filesystem",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "tool-skill",
+          "moduleName": "@deepseek-ai/dsh-tool-skill",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "command-goal",
+          "moduleName": "@deepseek-ai/dsh-command-goal",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "tool-goal",
+          "moduleName": "@deepseek-ai/dsh-tool-goal",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "tool-ask-user",
+          "moduleName": "@deepseek-ai/dsh-tool-ask-user",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "tool-todo",
+          "moduleName": "@deepseek-ai/dsh-tool-todo",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "tool-web",
+          "moduleName": "@deepseek-ai/dsh-tool-web",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "present",
+          "moduleName": "@deepseek-ai/dsh-tool-present",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "tool-plugin-manager",
+          "moduleName": "@deepseek-ai/dsh-plugin-manager/tools",
+          "enabled": false
+        },
+        {
+          "entryId": "plan-mode",
+          "moduleName": "@deepseek-ai/dsh-plan-mode",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "compaction-basic",
+          "moduleName": "@deepseek-ai/dsh-compaction-basic",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "command-compact",
+          "moduleName": "@deepseek-ai/dsh-command-compact",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "tool-result-pruner",
+          "moduleName": "@deepseek-ai/dsh-compaction-tool-result-pruner",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "user-mode-model-selection",
+          "moduleName": "@deepseek-ai/dsh-tool-subagent/model-selection-settings",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "tool-subagent-control",
+          "moduleName": "@deepseek-ai/dsh-tool-subagent-control",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "tool-subagent-list-agents",
+          "moduleName": "@deepseek-ai/dsh-tool-subagent-control/list-agents",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "tool-subagent",
+          "moduleName": "@deepseek-ai/dsh-tool-subagent",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "user-mode-router",
+          "moduleName": "@local/dsh-user-mode-router-adaptive",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "tool-subagent-fork",
+          "moduleName": "@deepseek-ai/dsh-tool-subagent",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "tool-subagent-codex",
+          "moduleName": "@deepseek-ai/dsh-tool-subagent",
+          "enabled": false
+        },
+        {
+          "entryId": "tool-subagent-claude-code",
+          "moduleName": "@deepseek-ai/dsh-tool-subagent",
+          "enabled": false
+        },
+        {
+          "entryId": "workflow-ptc",
+          "moduleName": "@deepseek-ai/dsh-workflow-ptc",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "tool-workflow",
+          "moduleName": "@deepseek-ai/dsh-tool-workflow",
+          "enabled": true,
+          "fiberState": 2
+        },
+        {
+          "entryId": "tool-ralph",
+          "moduleName": "@deepseek-ai/dsh-tool-ralph",
+          "enabled": false
+        }
+      ]
+    }
+  ],
+  "leakedServices": [],
+  "checks": [
+    {
+      "label": "simple-extraction",
+      "routing": {
+        "version": "adaptive-v1",
+        "mode": "experimental",
+        "quality_gate_passed": false,
+        "recommendation": {
+          "provider": "zai-coding-cn",
+          "model": "glm-5.3-flash"
+        },
+        "tier": "fast",
+        "confidence": 0.9989930987358093,
+        "task_type": "extraction",
+        "needs_vision": false,
+        "context_truncated": false,
+        "reasons": [],
+        "policy_version": "effort-v1",
+        "policy_sha256": "6344bc559ffdb7063bba6fd1d5eb9a0fb394d3bdaf28550ee1b4081ef15a1956",
+        "applied_route": {
+          "provider": "zai-coding-cn",
+          "model": "glm-5.3-flash"
+        },
+        "effort": {
+          "level": "light",
+          "reasons": [
+            "difficulty:fast"
+          ],
+          "riskEscalation": false,
+          "policy_version": "effort-v1",
+          "selected": "low",
+          "source": "policy",
+          "supported": [
+            "low",
+            "high",
+            "max"
+          ]
+        },
+        "delegation_elapsed_ms": 0
+      },
+      "forwarded": {
+        "provider": "zai-coding-cn",
+        "model": "glm-5.3-flash",
+        "reasoning_effort": "low"
+      }
+    },
+    {
+      "label": "ordinary-implementation",
+      "routing": {
+        "version": "adaptive-v1",
+        "mode": "experimental",
+        "quality_gate_passed": false,
+        "recommendation": {
+          "provider": "zai-coding-cn",
+          "model": "glm-5.3"
+        },
+        "tier": "balanced",
+        "confidence": 0.9955078363418579,
+        "task_type": "implementation",
+        "needs_vision": false,
+        "context_truncated": false,
+        "reasons": [],
+        "policy_version": "effort-v1",
+        "policy_sha256": "6344bc559ffdb7063bba6fd1d5eb9a0fb394d3bdaf28550ee1b4081ef15a1956",
+        "applied_route": {
+          "provider": "zai-coding-cn",
+          "model": "glm-5.3"
+        },
+        "effort": {
+          "level": "normal",
+          "reasons": [
+            "difficulty:balanced"
+          ],
+          "riskEscalation": false,
+          "policy_version": "effort-v1",
+          "selected": "high",
+          "source": "policy",
+          "supported": [
+            "low",
+            "high",
+            "max"
+          ]
+        },
+        "delegation_elapsed_ms": 0
+      },
+      "forwarded": {
+        "provider": "zai-coding-cn",
+        "model": "glm-5.3",
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "label": "complex-review",
+      "routing": {
+        "version": "adaptive-v1",
+        "mode": "experimental-fallback",
+        "quality_gate_passed": false,
+        "recommendation": {
+          "provider": "openai-codex",
+          "model": "gpt-6.1-sol"
+        },
+        "tier": "flagship",
+        "confidence": 0.9998838901519775,
+        "task_type": "review",
+        "needs_vision": false,
+        "context_truncated": false,
+        "reasons": [
+          "risk-model-escalation"
+        ],
+        "policy_version": "effort-v1",
+        "policy_sha256": "6344bc559ffdb7063bba6fd1d5eb9a0fb394d3bdaf28550ee1b4081ef15a1956",
+        "applied_route": {
+          "provider": "openai-codex",
+          "model": "gpt-6.1-sol"
+        },
+        "effort": {
+          "level": "deep",
+          "reasons": [
+            "difficulty:flagship",
+            "risk:high-impact-action"
+          ],
+          "riskEscalation": true,
+          "policy_version": "effort-v1",
+          "selected": "high",
+          "source": "policy",
+          "supported": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "delegation_elapsed_ms": 0
+      },
+      "forwarded": {
+        "provider": "openai-codex",
+        "model": "gpt-6.1-sol",
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "label": "visual-layout",
+      "routing": {
+        "version": "adaptive-v1",
+        "mode": "experimental-fallback",
+        "quality_gate_passed": false,
+        "recommendation": {
+          "provider": "openai-codex",
+          "model": "gpt-6.1-sol"
+        },
+        "tier": "fast",
+        "confidence": 0.590829074382782,
+        "task_type": "visual",
+        "needs_vision": true,
+        "context_truncated": false,
+        "reasons": [
+          "low-confidence-or-truncated-context",
+          "uncertainty-flagship-fallback"
+        ],
+        "policy_version": "effort-v1",
+        "policy_sha256": "6344bc559ffdb7063bba6fd1d5eb9a0fb394d3bdaf28550ee1b4081ef15a1956",
+        "applied_route": {
+          "provider": "openai-codex",
+          "model": "gpt-6.1-sol"
+        },
+        "effort": {
+          "level": "normal",
+          "reasons": [
+            "difficulty:fast",
+            "classification-uncertain"
+          ],
+          "riskEscalation": false,
+          "policy_version": "effort-v1",
+          "selected": "medium",
+          "source": "policy",
+          "supported": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "delegation_elapsed_ms": 0
+      },
+      "forwarded": {
+        "provider": "openai-codex",
+        "model": "gpt-6.1-sol",
+        "reasoning_effort": "medium"
+      }
+    },
+    {
+      "label": "same-gpt-simple",
+      "routing": {
+        "version": "adaptive-v1",
+        "mode": "explicit",
+        "quality_gate_passed": false,
+        "recommendation": {
+          "provider": "zai-coding-cn",
+          "model": "glm-5.3-flash"
+        },
+        "tier": "fast",
+        "confidence": 0.9989930987358093,
+        "task_type": "extraction",
+        "needs_vision": false,
+        "context_truncated": false,
+        "reasons": [],
+        "policy_version": "effort-v1",
+        "policy_sha256": "6344bc559ffdb7063bba6fd1d5eb9a0fb394d3bdaf28550ee1b4081ef15a1956",
+        "applied_route": {
+          "provider": "openai-codex",
+          "model": "gpt-6.1-sol"
+        },
+        "effort": {
+          "level": "light",
+          "reasons": [
+            "difficulty:fast"
+          ],
+          "riskEscalation": false,
+          "policy_version": "effort-v1",
+          "selected": "low",
+          "source": "policy",
+          "supported": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "delegation_elapsed_ms": 0
+      },
+      "forwarded": {
+        "provider": "openai-codex",
+        "model": "gpt-6.1-sol",
+        "reasoning_effort": "low"
+      }
+    }
+  ],
+  "cloud_generation_executed": false,
+  "child_creation_executed": false,
+  "diagnostic_fixture_source": true
+}

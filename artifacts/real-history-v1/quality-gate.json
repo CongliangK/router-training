@@ -1,0 +1,11 @@
+{
+  "passed": false,
+  "mode": "shadow",
+  "reasons": [
+    "No independent candidate-model task-success benchmark has been collected.",
+    "Fewer than 30 independent flagship test examples.",
+    "Fewer than 20 independent vision-positive test examples.",
+    "Flagship under-routing exceeds 5%.",
+    "Vision false-negative rate exceeds 5%."
+  ]
+}

@@ -1,0 +1,683 @@
+{
+  "run": "real-history-v3c",
+  "seed": 20261010,
+  "base_model": {
+    "model": "internlm/Intern-Decision-0.8B",
+    "revision": "85a0cc5a99d67ea8d56dfe98115689212867171d",
+    "path": "/upstream-router-framework/models/intern-decision-0.8b",
+    "trust_remote_code": false
+  },
+  "training": {
+    "epochs": 6,
+    "rank": 8,
+    "lr": 0.0001,
+    "accumulation": 8,
+    "trainable_parameters": 498113344,
+    "optimizer_updates": 1158,
+    "seconds": 6873.6203843050025,
+    "history": [
+      {
+        "epoch": 1,
+        "train_loss": 0.8238139171757277,
+        "calibration_macro_f1": 0.536693847294292,
+        "calibration_tier_nll": 0.7849329097738811,
+        "calibration_vision_recall": 1.0
+      },
+      {
+        "epoch": 2,
+        "train_loss": 0.4401800336193018,
+        "calibration_macro_f1": 0.5993993993993993,
+        "calibration_tier_nll": 0.8100298184958803,
+        "calibration_vision_recall": 0.0
+      },
+      {
+        "epoch": 3,
+        "train_loss": 0.3540711878242041,
+        "calibration_macro_f1": 0.5993993993993993,
+        "calibration_tier_nll": 0.8727632857568629,
+        "calibration_vision_recall": 0.0
+      },
+      {
+        "epoch": 4,
+        "train_loss": 0.36272356671736555,
+        "calibration_macro_f1": 0.6466353677621283,
+        "calibration_tier_nll": 0.7759001773352742,
+        "calibration_vision_recall": 0.0
+      },
+      {
+        "epoch": 5,
+        "train_loss": 0.4091372518533244,
+        "calibration_macro_f1": 0.6339041095890411,
+        "calibration_tier_nll": 0.8040121939295521,
+        "calibration_vision_recall": 0.0
+      },
+      {
+        "epoch": 6,
+        "train_loss": 0.40093626966156387,
+        "calibration_macro_f1": 0.49662162162162166,
+        "calibration_tier_nll": 0.8653858827406646,
+        "calibration_vision_recall": 0.0
+      }
+    ]
+  },
+  "evaluation_basis": "agreement with fresh expert prompt-only labels; NOT real generation task success",
+  "baseline": {
+    "rows": 104,
+    "context_truncated": 0,
+    "mean_latency_ms": 102.10406997094441,
+    "tier": {
+      "evaluated_rows": 104,
+      "accuracy": 0.6923076923076923,
+      "nll": 0.6826298543118203,
+      "brier": 0.43183395362606053,
+      "ece_5_bins": 0.14434691805105943,
+      "confusion": {
+        "fast": {
+          "fast": 0,
+          "balanced": 2,
+          "flagship": 0
+        },
+        "balanced": {
+          "fast": 0,
+          "balanced": 72,
+          "flagship": 0
+        },
+        "flagship": {
+          "fast": 0,
+          "balanced": 30,
+          "flagship": 0
+        }
+      }
+    },
+    "vision": {
+      "evaluated_rows": 101,
+      "accuracy": 0.6732673267326733,
+      "nll": 0.5042516374446467,
+      "brier": 0.345164692502566,
+      "ece_5_bins": 0.1374411205253979,
+      "confusion": {
+        "no": {
+          "no": 24,
+          "yes": 3
+        },
+        "yes": {
+          "no": 30,
+          "yes": 44
+        }
+      }
+    },
+    "task_type": {
+      "evaluated_rows": 104,
+      "accuracy": 0.7403846153846154,
+      "nll": 1.3237277632287798,
+      "brier": 0.567103440218699,
+      "ece_5_bins": 0.28246683512742704,
+      "confusion": {
+        "extraction": {
+          "extraction": 0,
+          "research": 0,
+          "implementation": 2,
+          "debugging": 0,
+          "review": 0,
+          "visual": 0,
+          "creative": 0
+        },
+        "research": {
+          "extraction": 0,
+          "research": 8,
+          "implementation": 3,
+          "debugging": 0,
+          "review": 0,
+          "visual": 0,
+          "creative": 0
+        },
+        "implementation": {
+          "extraction": 0,
+          "research": 0,
+          "implementation": 34,
+          "debugging": 0,
+          "review": 0,
+          "visual": 0,
+          "creative": 0
+        },
+        "debugging": {
+          "extraction": 0,
+          "research": 0,
+          "implementation": 4,
+          "debugging": 1,
+          "review": 0,
+          "visual": 0,
+          "creative": 0
+        },
+        "review": {
+          "extraction": 0,
+          "research": 0,
+          "implementation": 1,
+          "debugging": 1,
+          "review": 34,
+          "visual": 0,
+          "creative": 0
+        },
+        "visual": {
+          "extraction": 0,
+          "research": 0,
+          "implementation": 0,
+          "debugging": 0,
+          "review": 0,
+          "visual": 0,
+          "creative": 0
+        },
+        "creative": {
+          "extraction": 0,
+          "research": 0,
+          "implementation": 16,
+          "debugging": 0,
+          "review": 0,
+          "visual": 0,
+          "creative": 0
+        }
+      }
+    },
+    "flagship_underroute_rate": 1.0,
+    "vision_false_negative_rate": 0.40540540540540543,
+    "flagship_examples": 30,
+    "vision_positive_examples": 74,
+    "tier_per_class": {
+      "fast": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 2,
+        "tn": 102,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "balanced": {
+        "tp": 72,
+        "fp": 32,
+        "fn": 0,
+        "tn": 0,
+        "precision": 0.6923076923076923,
+        "recall": 1.0,
+        "f1": 0.8181818181818181
+      },
+      "flagship": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 30,
+        "tn": 74,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "macro_f1": 0.2727272727272727
+    },
+    "vision_per_class": {
+      "no": {
+        "tp": 24,
+        "fp": 30,
+        "fn": 3,
+        "tn": 44,
+        "precision": 0.4444444444444444,
+        "recall": 0.8888888888888888,
+        "f1": 0.5925925925925926
+      },
+      "yes": {
+        "tp": 44,
+        "fp": 3,
+        "fn": 30,
+        "tn": 24,
+        "precision": 0.9361702127659575,
+        "recall": 0.5945945945945946,
+        "f1": 0.7272727272727273
+      },
+      "macro_f1": 0.6599326599326599
+    },
+    "bootstrap": {
+      "tier_accuracy": {
+        "low": 0.5961538461538461,
+        "high": 0.7788461538461539
+      },
+      "flagship_recall": {
+        "low": 0.0,
+        "high": 0.0
+      },
+      "flagship_precision": {
+        "low": 0.0,
+        "high": 0.0
+      },
+      "vision_recall": {
+        "low": 0.4864864864864865,
+        "high": 0.7027027027027027
+      }
+    }
+  },
+  "finetuned": {
+    "rows": 104,
+    "context_truncated": 0,
+    "mean_latency_ms": 158.22866904797522,
+    "tier": {
+      "evaluated_rows": 104,
+      "accuracy": 0.7211538461538461,
+      "nll": 1.4876328466720754,
+      "brier": 0.6780286195891387,
+      "ece_5_bins": 0.40767063716283214,
+      "confusion": {
+        "fast": {
+          "fast": 2,
+          "balanced": 0,
+          "flagship": 0
+        },
+        "balanced": {
+          "fast": 0,
+          "balanced": 45,
+          "flagship": 27
+        },
+        "flagship": {
+          "fast": 0,
+          "balanced": 2,
+          "flagship": 28
+        }
+      }
+    },
+    "vision": {
+      "evaluated_rows": 101,
+      "accuracy": 0.8811881188118812,
+      "nll": 0.3570848341460255,
+      "brier": 0.20029550201294066,
+      "ece_5_bins": 0.07780015291553911,
+      "confusion": {
+        "no": {
+          "no": 18,
+          "yes": 9
+        },
+        "yes": {
+          "no": 3,
+          "yes": 71
+        }
+      }
+    },
+    "task_type": {
+      "evaluated_rows": 104,
+      "accuracy": 0.75,
+      "nll": 1.1051588811841573,
+      "brier": 0.4923814613214319,
+      "ece_5_bins": 0.27751974360300946,
+      "confusion": {
+        "extraction": {
+          "extraction": 2,
+          "research": 0,
+          "implementation": 0,
+          "debugging": 0,
+          "review": 0,
+          "visual": 0,
+          "creative": 0
+        },
+        "research": {
+          "extraction": 0,
+          "research": 8,
+          "implementation": 1,
+          "debugging": 0,
+          "review": 0,
+          "visual": 2,
+          "creative": 0
+        },
+        "implementation": {
+          "extraction": 0,
+          "research": 0,
+          "implementation": 31,
+          "debugging": 3,
+          "review": 0,
+          "visual": 0,
+          "creative": 0
+        },
+        "debugging": {
+          "extraction": 0,
+          "research": 0,
+          "implementation": 0,
+          "debugging": 5,
+          "review": 0,
+          "visual": 0,
+          "creative": 0
+        },
+        "review": {
+          "extraction": 0,
+          "research": 0,
+          "implementation": 4,
+          "debugging": 0,
+          "review": 32,
+          "visual": 0,
+          "creative": 0
+        },
+        "visual": {
+          "extraction": 0,
+          "research": 0,
+          "implementation": 0,
+          "debugging": 0,
+          "review": 0,
+          "visual": 0,
+          "creative": 0
+        },
+        "creative": {
+          "extraction": 0,
+          "research": 0,
+          "implementation": 16,
+          "debugging": 0,
+          "review": 0,
+          "visual": 0,
+          "creative": 0
+        }
+      }
+    },
+    "flagship_underroute_rate": 0.06666666666666667,
+    "vision_false_negative_rate": 0.04054054054054054,
+    "flagship_examples": 30,
+    "vision_positive_examples": 74,
+    "tier_per_class": {
+      "fast": {
+        "tp": 2,
+        "fp": 0,
+        "fn": 0,
+        "tn": 102,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "balanced": {
+        "tp": 45,
+        "fp": 2,
+        "fn": 27,
+        "tn": 30,
+        "precision": 0.9574468085106383,
+        "recall": 0.625,
+        "f1": 0.7563025210084033
+      },
+      "flagship": {
+        "tp": 28,
+        "fp": 27,
+        "fn": 2,
+        "tn": 47,
+        "precision": 0.509090909090909,
+        "recall": 0.9333333333333333,
+        "f1": 0.6588235294117647
+      },
+      "macro_f1": 0.8050420168067226
+    },
+    "vision_per_class": {
+      "no": {
+        "tp": 18,
+        "fp": 3,
+        "fn": 9,
+        "tn": 71,
+        "precision": 0.8571428571428571,
+        "recall": 0.6666666666666666,
+        "f1": 0.75
+      },
+      "yes": {
+        "tp": 71,
+        "fp": 9,
+        "fn": 3,
+        "tn": 18,
+        "precision": 0.8875,
+        "recall": 0.9594594594594594,
+        "f1": 0.922077922077922
+      },
+      "macro_f1": 0.836038961038961
+    },
+    "bootstrap": {
+      "tier_accuracy": {
+        "low": 0.6346153846153846,
+        "high": 0.8076923076923077
+      },
+      "flagship_recall": {
+        "low": 0.8333333333333334,
+        "high": 1.0
+      },
+      "flagship_precision": {
+        "low": 0.37735849056603776,
+        "high": 0.6428571428571429
+      },
+      "vision_recall": {
+        "low": 0.9054054054054054,
+        "high": 1.0
+      }
+    }
+  },
+  "baseline_temperatures": {
+    "tier": 2,
+    "vision": 0.75,
+    "task_type": 2.747760550703
+  },
+  "baseline_calibration_notes": {
+    "tier": {
+      "nll": 0.5582884964873687,
+      "rows": 95
+    },
+    "vision": {
+      "nll": 0.1287299506915082,
+      "rows": 93
+    },
+    "task_type": "missing classes; retained checkpoint temperature (not locally calibrated)"
+  },
+  "temperatures": {
+    "tier": 1.5,
+    "vision": 1,
+    "task_type": 2.747760550703
+  },
+  "calibration_notes": {
+    "tier": {
+      "nll": 0.5373520246168376,
+      "rows": 48
+    },
+    "vision": {
+      "nll": 0.237983877292208,
+      "rows": 47
+    },
+    "task_type": "missing classes; retained checkpoint temperature (not locally calibrated)"
+  },
+  "logit_adjustment": {
+    "sweep": [
+      {
+        "tau": 0,
+        "macro_f1": 0.4501,
+        "flagship_recall": 0.6,
+        "flagship_fp_rate": 0.1163
+      },
+      {
+        "tau": 0.25,
+        "macro_f1": 0.4501,
+        "flagship_recall": 0.6,
+        "flagship_fp_rate": 0.1163
+      },
+      {
+        "tau": 0.5,
+        "macro_f1": 0.4501,
+        "flagship_recall": 0.6,
+        "flagship_fp_rate": 0.1163
+      },
+      {
+        "tau": 0.75,
+        "macro_f1": 0.4501,
+        "flagship_recall": 0.6,
+        "flagship_fp_rate": 0.1163
+      },
+      {
+        "tau": 1.0,
+        "macro_f1": 0.4501,
+        "flagship_recall": 0.6,
+        "flagship_fp_rate": 0.1163
+      },
+      {
+        "tau": 1.25,
+        "macro_f1": 0.4501,
+        "flagship_recall": 0.6,
+        "flagship_fp_rate": 0.1163
+      },
+      {
+        "tau": 1.5,
+        "macro_f1": 0.4501,
+        "flagship_recall": 0.6,
+        "flagship_fp_rate": 0.1163
+      },
+      {
+        "tau": 1.75,
+        "macro_f1": 0.4501,
+        "flagship_recall": 0.6,
+        "flagship_fp_rate": 0.1163
+      },
+      {
+        "tau": 2.0,
+        "macro_f1": 0.6001,
+        "flagship_recall": 0.6,
+        "flagship_fp_rate": 0.1395
+      }
+    ],
+    "chosen": {
+      "tau": 2.0,
+      "macro_f1": 0.6001,
+      "flagship_recall": 0.6,
+      "flagship_fp_rate": 0.1395
+    }
+  },
+  "tier_class_weights": {
+    "fast": 1.0,
+    "balanced": 1.0,
+    "flagship": 1.0
+  },
+  "vision_class_weights": {
+    "no": 0.3997,
+    "yes": 1.6003
+  },
+  "quality_gate": {
+    "passed": false,
+    "mode": "shadow",
+    "reasons": [
+      "No independent candidate-model task-success benchmark has been collected.",
+      "Tau operating point missed the recall>=0.75 / FP<=0.10 gate; relaxed point in use.",
+      "Flagship under-routing exceeds 5%."
+    ]
+  },
+  "split_report": {
+    "seed": 20261010,
+    "label_basis": "new expert hints; no candidate-model execution evidence",
+    "near_duplicate_threshold": 0.88,
+    "cross_root_near_duplicate_edges": 0,
+    "independent_groups": 37,
+    "splits": {
+      "train": {
+        "rows": 469,
+        "groups": [
+          "0515e6e29d9ae4a29dd6",
+          "10bfb4d01cc8344be90e",
+          "1cc373ffd4261a1e181b",
+          "30facc94cd88eeea58c2",
+          "389cc42d8bbc819f4301",
+          "44065d7c32e035b49e7e",
+          "4a82015e6b0379313043",
+          "5111a4a0a61d1be78661",
+          "542d6c39bf70fbcdc80a",
+          "5a9fb93794a804359b40",
+          "739342ed1b9c9a2ba26d",
+          "7d3070f84a37c329e97c",
+          "8462f3c30b2abe6cfbcd",
+          "b0859766044a190ae162",
+          "c2fd408fc8e722da637b",
+          "c4f658875c1e757dcbbb",
+          "c5b10350112dc92dd38e",
+          "de89149b0ecbdba8f95e",
+          "e014138b4b45bc71362c",
+          "e11bfce1030c3b667618",
+          "e6893d99e563c9688280",
+          "e89934701781976c3731"
+        ],
+        "tiers": {
+          "balanced": 358,
+          "flagship": 67,
+          "fast": 44
+        },
+        "vision": {
+          "no": 464,
+          "yes": 4,
+          "uncertain": 1
+        },
+        "task_types": {
+          "review": 133,
+          "implementation": 95,
+          "extraction": 51,
+          "creative": 151,
+          "research": 26,
+          "debugging": 12,
+          "visual": 1
+        }
+      },
+      "calibration": {
+        "rows": 95,
+        "groups": [
+          "1fa198393166158b89ed",
+          "2eab1dda4129536c2a7a",
+          "46bb51fa3ff29ffe4c12",
+          "838f7266b83f14d4d1c5",
+          "88d0a7082474b51478de",
+          "bd224a32dd1eedfaf1c2",
+          "e141251146573d8dfe8e",
+          "f6baa66748160e958eec"
+        ],
+        "tiers": {
+          "balanced": 74,
+          "flagship": 15,
+          "fast": 6
+        },
+        "vision": {
+          "no": 91,
+          "yes": 2,
+          "uncertain": 2
+        },
+        "task_types": {
+          "implementation": 34,
+          "review": 23,
+          "debugging": 1,
+          "research": 22,
+          "extraction": 6,
+          "creative": 9
+        }
+      },
+      "test": {
+        "rows": 104,
+        "groups": [
+          "0192d797126326b3fd35",
+          "078dbf2e882ceb0b2835",
+          "1cbebd8176deafaf7b08",
+          "427689b6ac4249bfd784",
+          "6843b0112e7456834f1a",
+          "c023e8c9038bf6144b52",
+          "ec267d5631d2c02a7722"
+        ],
+        "tiers": {
+          "flagship": 30,
+          "balanced": 72,
+          "fast": 2
+        },
+        "vision": {
+          "yes": 74,
+          "no": 27,
+          "uncertain": 3
+        },
+        "task_types": {
+          "review": 36,
+          "implementation": 34,
+          "creative": 16,
+          "research": 11,
+          "debugging": 5,
+          "extraction": 2
+        }
+      }
+    },
+    "dataset_sha256": "d6df301b1115303879a2f30e1b26d53eac94ae9a548a5fd06ad648b4806cb0eb",
+    "group_disjoint": true,
+    "historical_model_labels_used": false,
+    "limitations": [
+      "Only two independent roots contain vision-positive tasks; visual confidence calibration is not supported by a fully independent third root.",
+      "Expert imitation metrics do not establish candidate-model task success."
+    ]
+  }
+}

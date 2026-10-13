@@ -1,0 +1,79 @@
+{
+  "health": {
+    "ready": true,
+    "run": "real-history-v1",
+    "quality_gate": {
+      "passed": false,
+      "mode": "shadow",
+      "reasons": [
+        "No independent candidate-model task-success benchmark has been collected.",
+        "Fewer than 30 independent flagship test examples.",
+        "Fewer than 20 independent vision-positive test examples.",
+        "Flagship under-routing exceeds 5%.",
+        "Vision false-negative rate exceeds 5%."
+      ]
+    },
+    "history_model_labels_used": false
+  },
+  "checks": [
+    {
+      "schema_version": 1,
+      "mode": "shadow",
+      "quality_gate_passed": false,
+      "run": "real-history-v1",
+      "tier": "fast",
+      "tier_confidence": 0.9937134385108948,
+      "vision_probability": 0.018747517839074135,
+      "task_type": "extraction",
+      "context_truncated": false,
+      "recommendation": {
+        "provider": "zai-coding-cn",
+        "model": "glm-5.3-flash"
+      },
+      "needs_vision": false,
+      "required_tier": "fast",
+      "reasons": [],
+      "latency_ms": 393.76
+    },
+    {
+      "schema_version": 1,
+      "mode": "shadow",
+      "quality_gate_passed": false,
+      "run": "real-history-v1",
+      "tier": "flagship",
+      "tier_confidence": 0.9997180104255676,
+      "vision_probability": 0.036425016820430756,
+      "task_type": "review",
+      "context_truncated": false,
+      "recommendation": {
+        "provider": "openai-codex",
+        "model": "gpt-6.1-sol"
+      },
+      "needs_vision": false,
+      "required_tier": "flagship",
+      "reasons": [],
+      "latency_ms": 62.24
+    },
+    {
+      "schema_version": 1,
+      "mode": "shadow",
+      "quality_gate_passed": false,
+      "run": "real-history-v1",
+      "tier": "fast",
+      "tier_confidence": 0.590829074382782,
+      "vision_probability": 0.9360761642456055,
+      "task_type": "visual",
+      "context_truncated": false,
+      "recommendation": null,
+      "needs_vision": true,
+      "required_tier": "flagship",
+      "reasons": [
+        "low-confidence-or-truncated-context",
+        "no-authorized-route-meets-required-capability"
+      ],
+      "latency_ms": 60.75
+    }
+  ],
+  "real_finetuned_decision_model": true,
+  "cloud_generation_invoked": false
+}

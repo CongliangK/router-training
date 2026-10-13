@@ -1,0 +1,7 @@
+{
+  "epoch": 1,
+  "train_loss": 0.5202452433065123,
+  "calibration_macro_f1": 0.2916666666666667,
+  "calibration_tier_nll": 1.2147625728270683,
+  "calibration_vision_recall": 0.8696
+}

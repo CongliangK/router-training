@@ -1,0 +1,5 @@
+[
+  {"tier":"fast","provider":"zai-coding-cn","model":"glm-5.3-flash","vision":true},
+  {"tier":"balanced","provider":"zai-coding-cn","model":"glm-5.3","vision":false},
+  {"tier":"flagship","provider":"openai-codex","model":"gpt-6.1-sol","vision":true}
+]
