@@ -3,10 +3,14 @@
 Loads ONLY train.jsonl and calibration.jsonl from --data-dir (it never opens
 test.jsonl), validates rows / pre-registered A/B/C roles / support policy /
 deterministic folds through calibration_groups, and additionally checks that
-the real unique train rows support every adjusted head's prior. Output is a
-counts-only JSON summary (no group names, ids, labels, prompts, or private
-paths). No model, no GPU, no artifacts, no network. Exit 0 = structurally
-valid; exit 1 = violation (the error carries reasons and counts only).
+the real unique train rows support every adjusted head's prior. The business
+schema is NOT configurable: it is parsed from the same model_utils.py source
+the run imports (questions_from_source), and a roles config that tries to
+override the schema (or carries unknown keys) is rejected — preflight and
+run share one truth. Output is a counts-only JSON summary (no group names,
+ids, labels, prompts, or private paths). No model, no GPU, no artifacts, no
+network. Exit 0 = structurally valid; exit 1 = violation (the error carries
+reasons and counts only).
 
 This is the same preflight that train_eval.py runs before load_engine() and
 that scripts/train.py --dry-run performs for grouped launches, so all three

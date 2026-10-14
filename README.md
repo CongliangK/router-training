@@ -126,7 +126,12 @@ New runs therefore default to a strict, pre-registered grouping in
   training union. Vision stays a required head — preflight never silently
   downgrades to tier-only. `task_type` is optional: without support its
   temperature stays at T=1 and is reported as not calibrated (the legacy
-  2.747 fallback is never used).
+  2.747 fallback is never used). The business schema has ONE source:
+  `model_utils.QUESTIONS`, assembled by a single function the stdlib
+  preflight reaches by parsing that same file (no torch import). A roles
+  config cannot override the schema and unknown config keys are rejected,
+  so preflight, launcher dry-run, and the run itself validate the same
+  truth.
 - **Tau is selected by deterministic 3-fold GroupKFold over B** (groups
   sorted by row count, sha256 tiebreak, whole groups never split; every B row
   is a holdout exactly once). Per tau, each fold first applies
@@ -139,6 +144,20 @@ New runs therefore default to a strict, pre-registered grouping in
   estimate, not an unbiased evaluation.
 - **Priors come from real unique train rows only** (synthetic augmentation
   and repeated ids excluded; a class without support is a hard error).
+- **The selected calibration is server-consumable as-is.** A selected result
+  writes `calibration.json` with `temperatures` plus `tier_adjust` =
+  `tau·log(prior)` per class (and `tier_prior`, the tau, and the binding
+  hashes) — exactly what `server.py` loads and `model_utils.score` subtracts
+  from raw logits, so serving applies the same adjust-then-temper formula the
+  temperatures were fitted on. An **insufficient** result writes **no**
+  `calibration.json`: the server refuses to start for such a run instead of
+  silently routing unadjusted logits, and the run's quality gate stays
+  not-passed, so execution mode is never authorized.
+- **The binding locks checkpoint weight bytes.** `checkpoint_ref` in the
+  calibration binding is a streaming SHA-256 digest of the actual checkpoint
+  files (`adapter/` or `full-checkpoint/`, relative filenames explicit) — not
+  the `best-epoch.json` text. Any byte change in the shipped weights changes
+  the binding; free-text or tampered digests are rejected.
 - **The old row-split halves remain available only as explicit legacy**
   (`--legacy-calibration`), byte-for-byte, for v3c reproduction. Grouped dev
   runs never open the test split; a `--structural-dry-run` (or
@@ -149,6 +168,15 @@ New runs therefore default to a strict, pre-registered grouping in
 .venv/bin/python scripts/train.py --run v4-dev --roles roles.json --dry-run
 .venv/bin/python scripts/validate_calibration.py --roles roles.json --data-dir data
 ```
+
+`--data-dir` configures that preflight **only**: the actual grouped launch
+always reads the repository `data/` directory (`train_eval.py` takes no
+data-dir), so a non-default `--data-dir` is refused at launch and allowed
+only together with `--dry-run` — a run can never preflight one dataset and
+train on another. Grouped `--smoke` is honestly short: 24 train rows plus a
+whole-group calibration sub-pool re-validated under the SAME support policy
+(gates are never relaxed to make smoke pass; legacy smoke keeps its archived
+24-row behavior).
 
 Output summaries are counts-only (no group names, ids, labels, or prompts).
 **Status:** the archived calibration pool cannot satisfy the example gates

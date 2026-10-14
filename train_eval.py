@@ -123,24 +123,29 @@ def legacy_calibration_halves(calibration_rows,seed):
 
 
 def grouped_schema():
-    # Mirrors model_utils.QUESTIONS at runtime so the stdlib plan module
-    # (calibration_groups.py) never imports torch. Vision stays a REQUIRED
-    # head: strict preflight must not silently downgrade to tier-only when
-    # support is thin. task_type is optional and fixed at T=1 (reported as
-    # not calibrated) — the legacy 2.747 checkpoint fallback is never used
-    # by new runs.
-    return {'heads':{
-        'tier':{'label_key':'tier','classes':list(QUESTIONS['tier']['criteria']),'required':True,'calibration':'temperature','adjust':True},
-        'vision':{'label_key':'needs_vision','classes':list(QUESTIONS['vision']['criteria']),'required':True,'calibration':'temperature','adjust':False},
-        'task_type':{'label_key':'task_type','classes':list(QUESTIONS['task_type']['criteria']),'required':False,'calibration':'fixed','fixed_T':1.0}}}
+    # Runtime business schema: assembled from the LIVE model_utils.QUESTIONS by
+    # the SAME schema_from_questions the stdlib preflight uses (it parses this
+    # file's source via questions_from_source), so preflight and run cannot
+    # validate different truths. Vision stays a REQUIRED head: strict preflight
+    # must not silently downgrade to tier-only when support is thin. task_type
+    # is optional and fixed at T=1 (reported as not calibrated) — the legacy
+    # 2.747 checkpoint fallback is never used by new runs.
+    from calibration_groups import schema_from_questions
+    return schema_from_questions(QUESTIONS)
 
 
 def build_grouped_plan(calibration_rows,roles_config):
     # Issue #2 wiring: the pre-registered plan (A/B/C groups, support policy,
     # numeric protocol) is validated by the stdlib module BEFORE any model is
-    # loaded or any artifact directory is created.
-    from calibration_groups import build_plan
-    return build_plan(rows=calibration_rows,role_groups=roles_config['role_groups'],schema=grouped_schema(),
+    # loaded or any artifact directory is created. check_roles_config is the
+    # SAME contract preflight_roles enforces (no schema override, no unknown
+    # keys): a config that passes scripts/train.py --dry-run must mean exactly
+    # the same thing here, and a roles schema override can never downgrade
+    # vision to optional.
+    from calibration_groups import build_plan,check_roles_config,schema_from_questions
+    check_roles_config(roles_config)
+    return build_plan(rows=calibration_rows,role_groups=roles_config['role_groups'],
+                      schema=schema_from_questions(QUESTIONS),
                       support_policy=roles_config.get('support_policy'),protocol=roles_config.get('protocol'))
 
 
@@ -156,6 +161,40 @@ def run_grouped_calibration(plan,scored_rows,prior,protocol,checkpoint_ref):
                   'logits':{field:answer['logits'] for field,answer in row['answers'].items()}}
                  for row in scored_rows if row['id'] in by_id]
     return select_tau_oof(plan=plan,rows=logits_rows,prior=prior,protocol=protocol,checkpoint_ref=checkpoint_ref)
+
+
+def servable_calibration(calibration):
+    """The server-consumable calibration.json payload of a grouped run, or
+    None when nothing is servable. server.py's lifespan reads exactly
+    temperatures + tier_adjust (subtracted from raw logits by
+    model_utils.score, the same z - tau*log(prior) the temperatures were
+    fitted on), so a 'selected' result MUST carry both — serving a selected
+    calibration without tier_adjust would silently route raw logits through
+    a temperature fitted on adjusted ones. An 'insufficient' result produces
+    NO artifact: the run stays unservable (server startup refuses on the
+    missing file) instead of being filled with placeholder temperatures, and
+    its quality gate stays not-passed so execution mode never authorizes."""
+    if not isinstance(calibration,dict) or calibration.get('status')!='selected':
+        return None
+    if not calibration.get('temperatures') or 'tier_adjust' not in calibration:
+        raise ValueError('selected calibration is missing server-consumable temperatures/tier_adjust')
+    return {'status':'selected','selected_tau':calibration['selected_tau'],
+            'temperatures':calibration['temperatures'],'tier_adjust':calibration['tier_adjust'],
+            'tier_prior':calibration.get('tier_prior'),'calibrated':calibration['calibrated'],
+            'binding':calibration['binding'],'note':calibration['note']}
+
+
+def grouped_smoke_pool(datasets,roles):
+    # Grouped --smoke, honest and short (red-team F7): calibration keeps
+    # WHOLE groups (smallest-support first) re-validated under the SAME
+    # support policy — slicing rows would rebuild the issue #2 leak in
+    # miniature and no gate is ever relaxed — and TRAIN is shrunk to the
+    # same 24 rows as legacy smoke so the run is actually short. The prior
+    # is unaffected: run() captured real_train_rows before this slice.
+    from calibration_groups import smoke_subpool
+    plan=smoke_subpool(datasets['calibration'],roles['role_groups'],grouped_schema(),
+                       roles.get('support_policy'),roles.get('protocol'))
+    return plan,datasets['train'][:24]
 
 
 def run(args):
@@ -184,6 +223,11 @@ def run(args):
         plan=build_grouped_plan(datasets['calibration'],roles)  # preflight BEFORE load_engine()/artifacts
         protocol=plan['protocol']
         real_train_rows=datasets['train'][:]  # captured before synthetic joins: priors must come from real unique train rows only
+        # Prior preflight BEFORE any model/dir work (same truth as
+        # scripts/validate_calibration.py): real unique train rows must
+        # support every tier class, or the run fails before it starts.
+        from calibration_groups import compute_prior
+        prior=compute_prior(real_train_rows,'tier',grouped_schema())
         if args.structural_dry_run:
             from calibration_groups import anonymous_summary
             print('STRUCTURAL DRY RUN (no model, no artifacts, no test access)',json.dumps(anonymous_summary(plan),ensure_ascii=False),flush=True)
@@ -218,14 +262,14 @@ def run(args):
             print('SMOKE MODE: 24 train rows, 6+6 calibration rows, 1 epoch',flush=True)
     else:
         if args.smoke:
-            # Grouped smoke keeps WHOLE groups (smallest-support first) and
-            # re-validates the SAME support policy on the sub-pool; slicing
-            # rows here would rebuild the issue #2 leak in miniature, and no
-            # gate is ever relaxed to make a smoke run pass.
-            from calibration_groups import smoke_subpool
-            plan=smoke_subpool(datasets['calibration'],roles['role_groups'],grouped_schema(),roles.get('support_policy'),roles.get('protocol'))
+            # Grouped smoke (F7): whole-group calibration sub-pool under the
+            # SAME policy + a 24-row train slice, so it is genuinely short
+            # without relaxing any gate. See grouped_smoke_pool.
+            plan,datasets['train']=grouped_smoke_pool(datasets,roles)
             args.epochs=1
-            print('SMOKE MODE (grouped): whole-group sub-pool',len(plan['roles']['A'])+len(plan['roles']['B'])+len(plan['roles']['C']),'groups, 1 epoch',flush=True)
+            print('SMOKE MODE (grouped): 24 train rows, whole-group sub-pool',
+                  len(plan['roles']['A'])+len(plan['roles']['B'])+len(plan['roles']['C']),
+                  'groups, 1 epoch; support gates unchanged',flush=True)
         # Epoch/checkpoint selection reads ONLY role-A groups; temperatures
         # and tau are fitted ONLY on role-B groups later (group isolation).
         selection_rows=plan['rows_by_role']['A']
@@ -401,19 +445,29 @@ def run(args):
         # The result binds plan/prior/schema/protocol/checkpoint hashes so
         # compared models provably shared one plan, folds, grid, and budget.
         # This is a development estimate, not an independent evaluation.
-        from calibration_groups import compute_prior
+        from calibration_groups import checkpoint_digest
         scored_b=predict_rows(engine,plan['rows_by_role']['B'])
         write_predictions(output/'scored-B.jsonl',scored_b)
-        # Prior from REAL unique train rows only: synthetic augmentation and
-        # repeated ids are excluded, and missing tier support is a hard error
-        # (the legacy path keeps its own original prior untouched).
-        prior=compute_prior(real_train_rows,'tier',grouped_schema())
-        checkpoint_ref=(output/'best-epoch.json').read_text().strip()  # locked by role-A selection above
+        # Prior was preflighted above from REAL unique train rows only
+        # (synthetic augmentation and repeated ids excluded; missing tier
+        # support is a hard error; the legacy path keeps its own prior).
+        # F5: the calibration binds the SHA-256 of the ACTUAL checkpoint
+        # weight files (adapter/ or full-checkpoint/, streamed, relative
+        # filenames explicit) — not the best-epoch.json text, which is an
+        # unvalidated selection event, not weight bytes.
+        checkpoint_dir=output/('full-checkpoint' if args.fullft else 'adapter')
+        checkpoint_ref=json.dumps(checkpoint_digest(checkpoint_dir),sort_keys=True)
         calibration=run_grouped_calibration(plan,scored_b,{'tier':prior['probabilities']},protocol,checkpoint_ref)
-        (output/'calibration.json').write_text(json.dumps(calibration,ensure_ascii=False,indent=2)+'\n')
+        servable=servable_calibration(calibration)
+        if servable is not None:
+            # Only a selected calibration is servable: temperatures fitted on
+            # adjusted logits ship together with the tier_adjust the server
+            # subtracts (same formula), keeping train/serve parity.
+            (output/'calibration.json').write_text(json.dumps(servable,ensure_ascii=False,indent=2)+'\n')
         reasons=['Group-isolated development calibration only (issue #2): no test access; no independent evaluation has been run.',
                  'Training prerequisites under the pending evaluation protocol (approved development data/protocol) are NOT yet satisfied; this run is not training-ready or production-ready.']
-        if calibration['status']!='selected':reasons.append('No feasible tau under the registered protocol; temperatures were not calibrated.')
+        if calibration['status']!='selected':
+            reasons.append('No feasible tau under the registered protocol: temperatures were not calibrated and NO calibration.json was written; the server refuses to load this run rather than serve unadjusted logits.')
         report={'run':args.run,'seed':args.seed,'mode':'grouped-dev','base_model':json.loads((ROOT/'model-manifest.json').read_text()),'training':{'epochs':args.epochs,'rank':args.rank,'lr':args.lr,'accumulation':args.accumulation,'trainable_parameters':trainable,'optimizer_updates':updates,'seconds':time.perf_counter()-start,'history':history},'evaluation_basis':'group-isolated development calibration (A: checkpoint selection, B: out-of-fold temperature/tau); NOT an independent evaluation','calibration':calibration,'tier_class_weights':weights,'vision_class_weights':vision_weights,'quality_gate':{'passed':False,'mode':'shadow','reasons':reasons},'split_report':json.loads((ROOT/'data/split-report.json').read_text())}
         (output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
         (output/'quality-gate.json').write_text(json.dumps(report['quality_gate'],ensure_ascii=False,indent=2)+'\n')
@@ -469,7 +523,7 @@ def run(args):
     print('DONE',output/'report.json',json.dumps({'baseline_accuracy':baseline_metrics['tier']['accuracy'],'finetuned_accuracy':tuned_metrics['tier']['accuracy'],'quality_gate':report['quality_gate']},ensure_ascii=False),flush=True)
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('--run',default='real-history-v1');p.add_argument('--epochs',type=int,default=6);p.add_argument('--rank',type=int,default=8);p.add_argument('--lr',type=float,default=1e-4);p.add_argument('--accumulation',type=int,default=8);p.add_argument('--seed',type=int,default=20261010);p.add_argument('--synth',action='store_true',help='merge data/synth/*.jsonl into train/calibration');p.add_argument('--beta',type=float,default=.999);p.add_argument('--mlp',action='store_true',help='extend LoRA to MLP and all attention output/input projections (deeper modification)');p.add_argument('--fullft',action='store_true',help='full fine-tune of the language backbone (deepest modification; vision tower stays frozen via LoRA-free path)');p.add_argument('--label-smoothing',type=float,default=.05);p.add_argument('--swa',action='store_true',help='average the 3 best epochs by selection macro-F1 (model soup guardrail)');p.add_argument('--smoke',action='store_true',help='24-sample 1-epoch pipeline validation run')
+    p=argparse.ArgumentParser();p.add_argument('--run',default='real-history-v1');p.add_argument('--epochs',type=int,default=6);p.add_argument('--rank',type=int,default=8);p.add_argument('--lr',type=float,default=1e-4);p.add_argument('--accumulation',type=int,default=8);p.add_argument('--seed',type=int,default=20261010);p.add_argument('--synth',action='store_true',help='merge data/synth/*.jsonl into train/calibration');p.add_argument('--beta',type=float,default=.999);p.add_argument('--mlp',action='store_true',help='extend LoRA to MLP and all attention output/input projections (deeper modification)');p.add_argument('--fullft',action='store_true',help='full fine-tune of the language backbone (deepest modification; vision tower stays frozen via LoRA-free path)');p.add_argument('--label-smoothing',type=float,default=.05);p.add_argument('--swa',action='store_true',help='average the 3 best epochs by selection macro-F1 (model soup guardrail)');p.add_argument('--smoke',action='store_true',help='short pipeline validation run: legacy = 24 train rows, 6+6 calibration rows, 1 epoch; grouped = 24 train rows + whole-group calibration sub-pool, 1 epoch (support gates never relaxed)')
     p.add_argument('--legacy-calibration',action='store_true',help='reproduce the archived v3c row-split calibration exactly (issue #2: explicit legacy; new runs default to group-isolated calibration)')
     p.add_argument('--calibration-roles',default=None,help='JSON file with pre-registered A/B/C role groups (+ optional support_policy/protocol); required for new runs')
     p.add_argument('--structural-dry-run',action='store_true',help='grouped runs: run the CPU structural preflight (no model, no artifacts, no test access) and exit')

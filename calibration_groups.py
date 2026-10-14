@@ -23,30 +23,117 @@ Roles (pre-registered, never derived from a run seed):
 Safety conventions: every validation error carries a reason and counts only,
 never row ids, group names, or label values. Every numeric gate below marked
 PROVISIONAL is an example value for synthetic validation; the production
-numbers must come from an approved external protocol and are not frozen by
-any user decision yet (see research/E2r1 discussion; it is NOT approved).
+numbers must come from an approved external protocol that is still PENDING
+(none of these example numbers is frozen by any user decision).
 """
 from __future__ import annotations
+import ast
 import collections
 import hashlib
 import itertools
 import json
 import math
+from pathlib import Path
 
 DEFAULT_SALT = 'router-calibration-diagnostic-v1'
 ROLES = ('A', 'B', 'C')
 
-# Router head schema mirroring model_utils.QUESTIONS (kept in sync by a unit
-# test; this module must not import model_utils because that pulls in torch).
-DEFAULT_SCHEMA = {'heads': {
-    'tier': {'label_key': 'tier', 'classes': ['fast', 'balanced', 'flagship'],
-             'required': True, 'calibration': 'temperature', 'adjust': True},
-    'vision': {'label_key': 'needs_vision', 'classes': ['no', 'yes'],
-               'required': True, 'calibration': 'temperature', 'adjust': False},
-    'task_type': {'label_key': 'task_type',
-                  'classes': ['extraction', 'research', 'implementation', 'debugging', 'review', 'visual', 'creative'],
-                  'required': False, 'calibration': 'fixed', 'fixed_T': 1.0},
-}}
+# Calibration-side flags per business head. Classes ALWAYS come from
+# model_utils.QUESTIONS — the single source of truth — via
+# schema_from_questions: train_eval passes the runtime QUESTIONS object, the
+# stdlib preflight passes the same file parsed by questions_from_source
+# (AST constants only; this module must not import model_utils because that
+# pulls in torch). A unit test asserts both assemblies agree and that the
+# parser follows the real source (mutation canary), so the two entry points
+# cannot drift apart and no hand-maintained schema copy exists here.
+BUSINESS_HEAD_FLAGS = {
+    'tier': {'label_key': 'tier', 'required': True, 'calibration': 'temperature', 'adjust': True},
+    'vision': {'label_key': 'needs_vision', 'required': True, 'calibration': 'temperature', 'adjust': False},
+    'task_type': {'label_key': 'task_type', 'required': False, 'calibration': 'fixed', 'fixed_T': 1.0},
+}
+
+
+def schema_from_questions(questions):
+    """Assemble the calibration schema from a QUESTIONS-shaped mapping
+    ({head: {'criteria': {class: ...}}}). Single assembly point shared by the
+    runtime path (train_eval.grouped_schema) and the stdlib source-parsed
+    path (default_business_schema); vision stays REQUIRED here — nothing may
+    downgrade it to tier-only."""
+    heads = {}
+    for head, flags in BUSINESS_HEAD_FLAGS.items():
+        spec = dict(flags)
+        criteria = (questions or {}).get(head, {}).get('criteria')
+        if not isinstance(criteria, dict) or not criteria \
+                or not all(isinstance(c, str) and c for c in criteria):
+            raise PlanError(f'business schema needs an ordered non-empty class table for head {head}')
+        spec['classes'] = list(criteria)
+        heads[head] = spec
+    return {'heads': heads}
+
+
+def questions_from_source(path=None):
+    """Load ONLY the QUESTIONS/TIERS/TYPES constants from the real
+    model_utils.py source via the ast module (never imports torch/peft).
+    Returns {head: {'criteria': {class: None}}} preserving class order;
+    raises PlanError when the file or its literal structure is missing, so a
+    broken source fails loudly instead of falling back to a stale copy."""
+    source = Path(path) if path is not None else Path(__file__).resolve().parent / 'model_utils.py'
+    try:
+        tree = ast.parse(source.read_text(encoding='utf-8'))
+    except (OSError, SyntaxError, ValueError) as error:
+        raise PlanError(f'cannot read model_utils source for the business schema ({type(error).__name__}); '
+                        'the stdlib preflight refuses to guess a schema')
+    lists = {}
+    questions_node = None
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id in ('TIERS', 'TYPES'):
+                try:
+                    lists[target.id] = ast.literal_eval(node.value)
+                except ValueError:
+                    raise PlanError(f'model_utils {target.id} is not a literal list')
+            if isinstance(target, ast.Name) and target.id == 'QUESTIONS':
+                questions_node = node.value
+    if questions_node is None or not isinstance(questions_node, ast.Dict):
+        raise PlanError('model_utils has no literal QUESTIONS table')
+    questions = {}
+    for key_node, value_node in zip(questions_node.keys, questions_node.values):
+        if not isinstance(key_node, ast.Constant) or not isinstance(key_node.value, str):
+            raise PlanError('QUESTIONS field names must be string literals')
+        head = key_node.value
+        if not isinstance(value_node, ast.Dict):
+            raise PlanError(f'QUESTIONS field {head} is not a literal object')
+        criteria_node = None
+        for sub_key, sub_value in zip(value_node.keys, value_node.values):
+            if isinstance(sub_key, ast.Constant) and sub_key.value == 'criteria':
+                criteria_node = sub_value
+        if criteria_node is None:
+            raise PlanError(f'QUESTIONS field {head} has no criteria table')
+        classes = None
+        if isinstance(criteria_node, ast.Dict):  # tier / vision: literal keys
+            classes = [k.value for k in criteria_node.keys
+                       if isinstance(k, ast.Constant) and isinstance(k.value, str)]
+        else:
+            # task_type: dict(zip(TYPES, [...])) — classes come from TYPES.
+            call = criteria_node
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == 'dict' \
+                    and len(call.args) == 1:
+                call = call.args[0]  # unwrap dict(zip(...))
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == 'zip' \
+                    and call.args and isinstance(call.args[0], ast.Name):
+                classes = lists.get(call.args[0].id)
+        if not classes:
+            raise PlanError(f'cannot resolve ordered classes for QUESTIONS field {head}')
+        questions[head] = {'criteria': dict.fromkeys(classes)}
+    return questions
+
+
+def default_business_schema(path=None):
+    """The stdlib-side business schema: parsed from the same model_utils.py
+    the run imports, assembled by the same schema_from_questions."""
+    return schema_from_questions(questions_from_source(path))
 
 # PROVISIONAL example support gates (NOT user-frozen): A5/B6/C5 role groups,
 # >=5 rows and >=2 groups per required-head class per region, >=2 groups per
@@ -111,17 +198,29 @@ def _merge(defaults, override):
     return merged
 
 
+def _plain_int(value):
+    # bool is an int subclass in Python; True must never pass an integer gate.
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _finite_number(value):
+    # Rejects bools and non-finite floats (NaN/inf) alike: a NaN bound or a
+    # True temperature silently poisons the calibration math downstream.
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
 def _merge_policy(override):
     policy = _merge(DEFAULT_SUPPORT_POLICY, override)
     counts = policy.get('min_groups_per_role')
-    if not isinstance(counts, dict) or set(counts) != set(ROLES) or not all(isinstance(counts[r], int) and counts[r] >= 1 for r in ROLES):
+    if not isinstance(counts, dict) or set(counts) != set(ROLES) \
+            or not all(_plain_int(counts[r]) and counts[r] >= 1 for r in ROLES):
         raise PlanError('support policy min_groups_per_role must map A/B/C to positive integers')
     for key in ('min_rows_per_class', 'min_groups_per_class', 'min_fold_train_groups_per_class'):
         value = policy.get(key)
-        if not isinstance(value, int) or value < 1:
+        if not _plain_int(value) or value < 1:
             raise PlanError(f'support policy {key} must be a positive integer')
     folds = policy.get('n_folds')
-    if not isinstance(folds, int) or folds < 2:
+    if not _plain_int(folds) or folds < 2:
         raise PlanError('support policy n_folds must be an integer >= 2')
     return policy
 
@@ -129,18 +228,19 @@ def _merge_policy(override):
 def _merge_protocol(override):
     protocol = _merge(DEFAULT_PROTOCOL, override)
     grid = protocol.get('tau_grid')
-    if not isinstance(grid, list) or not grid or not all(isinstance(t, (int, float)) and math.isfinite(t) and t >= 0 for t in grid):
-        raise PlanError('protocol tau_grid must be a non-empty list of finite numbers >= 0')
+    if not isinstance(grid, list) or not grid or not all(_finite_number(t) and t >= 0 for t in grid):
+        raise PlanError('protocol tau_grid must be a non-empty list of finite numbers >= 0 '
+                        '(bools, NaN, and infinity are rejected)')
     lo, hi = protocol.get('temperature_bounds', [0, 0])
-    if not (isinstance(lo, (int, float)) and isinstance(hi, (int, float)) and 0 < lo < hi):
-        raise PlanError('protocol temperature_bounds must satisfy 0 < low < high')
-    if not isinstance(protocol.get('fit_max_iterations'), int) or protocol['fit_max_iterations'] < 1:
+    if not (_finite_number(lo) and _finite_number(hi) and 0 < lo < hi):
+        raise PlanError('protocol temperature_bounds must be two finite numbers with 0 < low < high')
+    if not _plain_int(protocol.get('fit_max_iterations')) or protocol['fit_max_iterations'] < 1:
         raise PlanError('protocol fit_max_iterations must be a positive integer')
-    if not isinstance(protocol.get('fit_tolerance'), (int, float)) or protocol['fit_tolerance'] <= 0:
-        raise PlanError('protocol fit_tolerance must be > 0')
+    if not _finite_number(protocol.get('fit_tolerance')) or protocol['fit_tolerance'] <= 0:
+        raise PlanError('protocol fit_tolerance must be a finite number > 0')
     epsilon = protocol.get('probability_epsilon')
-    if not isinstance(epsilon, (int, float)) or not (0 < epsilon < 1):
-        raise PlanError('protocol probability_epsilon must be in (0, 1)')
+    if not _finite_number(epsilon) or not (0 < epsilon < 1):
+        raise PlanError('protocol probability_epsilon must be a finite number in (0, 1)')
     return protocol
 
 
@@ -509,6 +609,62 @@ def default_selector(candidates):
     return min(feasible, key=lambda c: (c['pooled'], c['tau']))['tau']
 
 
+def _is_sha256_hex(value):
+    return isinstance(value, str) and len(value) == 64 and all(c in '0123456789abcdef' for c in value)
+
+
+def checkpoint_digest(directory):
+    """Streaming SHA-256 binding of the ACTUAL checkpoint weight files
+    (works for both LoRA adapter/ and full-checkpoint/ products, weights are
+    never loaded — bytes are hashed in 1 MiB chunks). Relative filenames are
+    explicit so the binding names exactly which bytes were locked; the
+    combined digest is order-independent (sorted names)."""
+    directory = Path(directory)
+    if not directory.is_dir():
+        raise PlanError('checkpoint digest requires the checkpoint directory (adapter/ or full-checkpoint/)')
+    file_digests = {}
+    for path in sorted(directory.rglob('*')):
+        if not path.is_file():
+            continue
+        digest = hashlib.sha256()
+        with path.open('rb') as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+                digest.update(chunk)
+        file_digests[str(path.relative_to(directory)).replace('\\', '/')] = digest.hexdigest()
+    if not file_digests:
+        raise PlanError('checkpoint directory has no files to bind')
+    combined = hashlib.sha256(''.join(f'{name}:{file_digests[name]}\n'
+                                      for name in sorted(file_digests)).encode()).hexdigest()
+    return {'algorithm': 'sha256', 'file_count': len(file_digests),
+            'file_digests': file_digests, 'digest': combined}
+
+
+def verify_checkpoint_ref(checkpoint_ref):
+    """checkpoint_ref must be the JSON output of checkpoint_digest (or an
+    equivalent sha256 file-digest binding): a binding to the checkpoint
+    WEIGHT BYTES. Free text (a best-epoch.json snippet, an epoch id, any
+    other unvalidated selection event) and self-inconsistent (tampered)
+    digests are rejected — the calibration binding must be verifiable, not
+    asserted."""
+    try:
+        binding = json.loads(checkpoint_ref)
+    except ValueError:
+        raise PlanError('checkpoint_ref must be a JSON checkpoint digest (checkpoint_digest output), '
+                        'not free text or a selection-event label')
+    if not isinstance(binding, dict) or binding.get('algorithm') != 'sha256' \
+            or not isinstance(binding.get('file_digests'), dict) or not binding['file_digests'] \
+            or not _is_sha256_hex(binding.get('digest')):
+        raise PlanError('checkpoint_ref digest must carry algorithm=sha256, non-empty file_digests, and a digest')
+    for name, digest in binding['file_digests'].items():
+        if not isinstance(name, str) or not name or name.startswith(('/', '..')) or '\\' in name \
+                or not _is_sha256_hex(digest):
+            raise PlanError('checkpoint_ref file entries must be explicit relative filenames with sha256 hex digests')
+    combined = hashlib.sha256(''.join(f'{name}:{binding["file_digests"][name]}\n'
+                                      for name in sorted(binding['file_digests'])).encode()).hexdigest()
+    if combined != binding['digest']:
+        raise PlanError('checkpoint_ref digest does not match its file digests (tampered binding rejected)')
+
+
 def select_tau_oof(plan, rows, prior, checkpoint_ref, protocol=None):
     """Out-of-fold tau/T selection over role B (the issue #2 mechanism).
 
@@ -524,13 +680,20 @@ def select_tau_oof(plan, rows, prior, checkpoint_ref, protocol=None):
     tau is chosen, temperatures are refitted once on the full B pool with the
     SAME adjust-then-fit order, and the result binds plan/prior/schema/
     protocol/checkpoint hashes so compared models provably shared one plan,
-    folds, grid, budget, and order. Tau selection is a development estimate;
-    this procedure does not make the whole evaluation unbiased."""
+    folds, grid, budget, and order; checkpoint_ref must be a checkpoint_digest
+    binding of the actual checkpoint weight bytes (verify_checkpoint_ref).
+    The selected result additionally carries the server-consumable payload
+    (temperatures plus tier_adjust = tau*log(prior) in the exact form
+    model_utils.score subtracts at serve time), so training-side adjustment
+    and serving-side adjustment cannot silently diverge. Tau selection is a
+    development estimate; this procedure does not make the whole evaluation
+    unbiased."""
     if not isinstance(plan, dict) or plan.get('mode') != 'protocol' or plan.get('diagnostic_only'):
         raise PlanError('out-of-fold selection requires a pre-registered protocol plan; '
                         'diagnostic halves cannot produce calibration products')
     if not isinstance(checkpoint_ref, str) or not checkpoint_ref.strip():
         raise PlanError('checkpoint must be locked by role A before tau selection (adjust-then-select order)')
+    verify_checkpoint_ref(checkpoint_ref)
     proto = _merge_protocol(protocol or plan['protocol'])
     schema = plan['schema']
     heads = schema['heads']
@@ -556,15 +719,17 @@ def select_tau_oof(plan, rows, prior, checkpoint_ref, protocol=None):
                 continue
             values = (row.get('logits') or {}).get(head)
             if not isinstance(values, list) or len(values) != len(spec['classes']) \
-                    or not all(isinstance(v, (int, float)) and math.isfinite(v) for v in values):
-                raise PlanError(f'scored logits invalid for head {head} (row id withheld)')
+                    or not all(_finite_number(v) for v in values):
+                raise PlanError(f'scored logits invalid for head {head} '
+                                '(bools, NaN, and infinity are rejected; row id withheld)')
 
     for head, spec in heads.items():
         if spec.get('calibration') == 'temperature' and spec.get('adjust'):
             probs = (prior or {}).get(head)
             if not isinstance(probs, dict) or set(probs) != set(spec['classes']) \
-                    or not all(isinstance(p, (int, float)) and 0 < p <= 1 for p in probs.values()):
-                raise PlanError(f'prior missing or malformed for adjusted head {head}')
+                    or not all(_finite_number(p) and 0 < p <= 1 for p in probs.values()):
+                raise PlanError(f'prior missing or malformed for adjusted head {head} '
+                                '(probabilities must be finite numbers in (0, 1]; bools rejected)')
 
     fit = proto.get('fit') or fit_temperature
     score = proto.get('score') or score_holdout
@@ -655,9 +820,18 @@ def select_tau_oof(plan, rows, prior, checkpoint_ref, protocol=None):
         groups = [r['split_group'] for r in b_rows]
         temperatures[head] = fit(logits, cls, groups, bounds, iterations, tolerance, epsilon)
         calibrated[head] = True
+    # Server-consumable adjustment (F1, train/serve parity): temperatures were
+    # fitted on z - tau*log(prior), so serving must subtract the SAME
+    # tau*log(prior) from raw logits before dividing by T. server.py loads
+    # calibration['tier_adjust'] into model_utils.score's adjustments, whose
+    # formula (values[index] - adjustment) is exactly this value.
+    adjustments = {head: {c: chosen * math.log(prior[head][c]) for c in heads[head]['classes']}
+                   for head in temperature_heads if heads[head].get('adjust')}
     return {'status': 'selected', 'selected_tau': chosen, 'temperatures': temperatures,
+            'tier_adjust': adjustments.get('tier'), 'tier_prior': (prior or {}).get('tier'),
+            'adjustments': adjustments,
             'calibrated': calibrated, 'candidates': candidates, 'binding': binding,
-            'note': 'development estimate over role B folds; group-equal weighting; not an unbiased final evaluation'}
+            'note': 'development estimate over role B folds; group-equal weighting; not an unbiased evaluation'}
 
 
 def anonymous_summary(plan):
@@ -676,14 +850,39 @@ def anonymous_summary(plan):
             'plan_hash': plan['plan_hash'], 'protocol_hash': plan['protocol_hash']}
 
 
-def preflight_roles(calibration_rows, roles_config):
-    """Shared preflight used by every entry point: builds and validates a
-    protocol plan from a roles config object ({'role_groups': {...},
-    'support_policy': {...}?, 'protocol': {...}?, 'schema': {...}?})."""
+ROLES_CONFIG_KEYS = ('role_groups', 'support_policy', 'protocol')
+
+
+def check_roles_config(roles_config):
+    """Shared roles-config contract for EVERY entry point (train_eval.run,
+    scripts/train.py dry-run, scripts/validate_calibration.py). The config may
+    pre-register groups and numeric policy/protocol values only: it must NOT
+    override the business schema — heads/classes/required flags come from
+    model_utils.QUESTIONS through schema_from_questions, so a config can never
+    downgrade vision to optional or otherwise let a preflight pass that the
+    actual run would reject (or worse, accept with different meaning)."""
     if not isinstance(roles_config, dict) or 'role_groups' not in roles_config:
         raise PlanError("roles config must be an object with a 'role_groups' key")
-    schema = roles_config.get('schema') or DEFAULT_SCHEMA
-    return build_plan(rows=calibration_rows, role_groups=roles_config['role_groups'], schema=schema,
+    if 'schema' in roles_config:
+        raise PlanError('roles config must not override the business schema: heads, classes, and '
+                        'required flags are fixed by model_utils.QUESTIONS (vision cannot be '
+                        'downgraded to optional; preflight and run share one schema source)')
+    unknown = sorted(set(roles_config) - set(ROLES_CONFIG_KEYS))
+    if unknown:
+        raise PlanError(f"roles config has unknown key(s) {unknown}; allowed keys are "
+                        f"{list(ROLES_CONFIG_KEYS)} — a key the run would ignore cannot pass preflight")
+
+
+def preflight_roles(calibration_rows, roles_config, schema=None):
+    """Shared preflight used by every entry point: builds and validates a
+    protocol plan from a roles config object ({'role_groups': {...},
+    'support_policy': {...}?, 'protocol': {...}?}). The schema is NOT
+    configurable here: it always comes from the business schema source
+    (default_business_schema, parsed from the same model_utils.py the run
+    imports), so preflight and run cannot validate different truths."""
+    check_roles_config(roles_config)
+    return build_plan(rows=calibration_rows, role_groups=roles_config['role_groups'],
+                      schema=schema or default_business_schema(),
                       support_policy=roles_config.get('support_policy'),
                       protocol=roles_config.get('protocol'))
 

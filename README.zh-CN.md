@@ -85,15 +85,19 @@ GitHub Actions 在 push 和 pull request 时执行这一 CPU 检查；CPU runner
 因此新 run 默认走 `calibration_groups.py`（纯 stdlib，无 torch 也可导入）的严格预注册分组：
 
 - **A/B/C 角色预注册**在 roles JSON（`role_groups` + 可选 `support_policy`/`protocol`）。A=checkpoint 选择行，B=温度/tau 拟合行，C=保留作最终配置选择。组与 id 跨角色互斥且必须覆盖全部校准行；缺角色即硬失败，**绝无按 seed 重切的回退**。
-- **支持门 fail-closed**。示例门（provisional，*未经用户冻结*）：A/B/C ≥5/6/5 组、每区每 required 头每类 ≥5 行且 ≥2 组、B 每折训练并集每类 ≥2 组。vision 保持 required——preflight 绝不默默降级成 tier-only。`task_type` 可选：支持不足时温度固定 T=1 并如实标注未校准（绝不沿用 legacy 的 2.747 兜底）。
+- **支持门 fail-closed**。示例门（provisional，*未经用户冻结*）：A/B/C ≥5/6/5 组、每区每 required 头每类 ≥5 行且 ≥2 组、B 每折训练并集每类 ≥2 组。vision 保持 required——preflight 绝不默默降级成 tier-only。`task_type` 可选：支持不足时温度固定 T=1 并如实标注未校准（绝不沿用 legacy 的 2.747 兜底）。业务 schema 只有一个来源：`model_utils.QUESTIONS`，由单一组装函数装配；stdlib 预检通过解析同一文件获得（不导入 torch）。roles 配置不得覆盖 schema、未知键一律拒绝——预检、launcher dry-run 与实际 run 校验同一事实。
 - **tau 由 B 上确定性三折 GroupKFold 选出**（组按行数降序、sha256 打平、整组不拆；每条 B 行恰为一次 holdout）。每个 tau 先对各折训练行施加 `z − tau·log(prior)`，**再**拟合该折温度，holdout 用同公式评分；全程组等权。holdout 折缺类时该头记 null（绝不伪造 0 分）；无可行 tau 就不选择。选定后只在全 B 上重拟合并绑定 plan/prior/schema/protocol/checkpoint 哈希。这是开发估计，不是无偏评测。
 - **prior 只来自真实唯一 train 行**（排除合成增广与重复 id；任一类无支持即硬错误）。
+- **selected 校准产物可直接被服务消费**。selected 结果写出的 `calibration.json` 携带 `temperatures` 与按类的 `tier_adjust = tau·log(prior)`（另含 `tier_prior`、tau 与绑定哈希）——正是 `server.py` 加载、`model_utils.score` 从原始 logits 减去的量，服务端因此执行与拟合完全相同的"先调整再除温度"公式。**insufficient** 结果**不写** `calibration.json`：服务拒绝加载该 run，绝不默默路由未调整的 logits；质量门保持未通过，execution 模式永不授权。
+- **绑定锁定 checkpoint 权重字节**。校准绑定中的 `checkpoint_ref` 是对实际 checkpoint 文件（`adapter/` 或 `full-checkpoint/`，流式 SHA-256，相对文件名明确）的摘要，不是 `best-epoch.json` 文本；交付权重任一字节变化都会改变绑定，自由文本或被篡改的摘要一律拒绝。
 - **旧行级二分仅保留为显式 legacy**（`--legacy-calibration`），逐字复现 v3c。分组开发 run 绝不打开 test；`--structural-dry-run`（或分组模式下 `scripts/train.py --dry-run`）执行真实 CPU 预检——无模型、无产物、不读 test：
 
 ```sh
 .venv/bin/python scripts/train.py --run v4-dev --roles roles.json --dry-run
 .venv/bin/python scripts/validate_calibration.py --roles roles.json --data-dir data
 ```
+
+`--data-dir` **只**作用于该预检：实际分组启动永远读仓库 `data/` 目录（`train_eval.py` 没有 data-dir 参数），非默认 `--data-dir` 在启动时被拒绝、仅允许与 `--dry-run` 同用——run 绝不会预检一份数据却在另一份上训练。分组 `--smoke` 名副其实地短：24 行训练数据 + 按整组收缩的校准子池，并用**同一**支持策略重新校验（绝不为了 smoke 放宽门槛；legacy smoke 保持归档的 24 行行为）。
 
 输出摘要只含计数（不含组名、id、标签或 prompt）。**现状**：归档校准池无法满足示例门（约 8 个组、部分类集中在极少数组——见 issue #2），现有数据无法实例化任何分组 run；门槛不为迁就数据放宽，需要补按组隔离的开发数据。训练的完整 dev-no-test 与获批数值协议尚未满足——本仓库不声称已具备训练前置条件。
 
