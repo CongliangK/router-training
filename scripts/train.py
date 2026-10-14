@@ -18,6 +18,12 @@ train_eval.py defaults (synth/fullft/swa off); a grouped run now declares
 deviations from v3c ONLY through an explicit --recipe JSON override (unknown
 or wrongly-typed keys are refused), the deviations are echoed to the console,
 and the --dry-run Command lists every recipe flag actually passed.
+
+Issue #14b: the optimizer is a recorded recipe choice too — --recipe may
+declare {"optimizer": "adamw8bit"} (enum-validated). The key is absent from
+configs/v3c.json (frozen archive; the v3c run used train_eval.py's adamw
+default), so the flag is passed ONLY when declared and archived-reproduction
+commands stay byte-identical.
 """
 from pathlib import Path
 import argparse
@@ -35,6 +41,11 @@ RECIPE_PATH = ROOT / 'configs/v3c.json'
 # metadata, not overridable training input.
 RECIPE_SCALAR_KEYS = ['epochs', 'rank', 'lr', 'accumulation', 'seed', 'beta', 'label_smoothing']
 RECIPE_FLAG_KEYS = ['synth', 'mlp', 'fullft', 'swa']
+# Issue #14b enum keys: NOT present in configs/v3c.json (frozen archive), so
+# each entry carries the value the archived v3c effectively used (the
+# train_eval.py default) plus the allowed values. The flag reaches
+# train_eval.py only when explicitly declared via --recipe.
+RECIPE_ENUM_KEYS = {'optimizer': ('adamw', ('adamw', 'adamw8bit'))}
 
 
 def data_dir_guard(args, parser):
@@ -61,6 +72,12 @@ def recipe_flags(recipe):
     for key in RECIPE_FLAG_KEYS:
         if recipe[key]:
             flags.append('--' + key)
+    # Issue #14b enum keys: emitted ONLY when declared (they have no v3c.json
+    # entry to default from), so undeclared runs keep the train_eval.py
+    # default — adamw — and archived-reproduction commands stay unchanged.
+    for key in RECIPE_ENUM_KEYS:
+        if key in recipe:
+            flags.extend(['--' + key.replace('_', '-'), recipe[key]])
     return flags
 
 
@@ -78,13 +95,22 @@ def merged_recipe(recipe, overrides_path, parser):
         parser.error(f'--recipe must be a readable JSON object: {error}')
     if not isinstance(overrides, dict) or not overrides:
         parser.error('--recipe must be a non-empty JSON object of recipe overrides')
-    allowed = set(RECIPE_SCALAR_KEYS) | set(RECIPE_FLAG_KEYS)
+    allowed = set(RECIPE_SCALAR_KEYS) | set(RECIPE_FLAG_KEYS) | set(RECIPE_ENUM_KEYS)
     unknown = sorted(set(overrides) - allowed)
     if unknown:
         parser.error(f'--recipe has unknown keys {unknown}; overridable keys: {sorted(allowed)}')
     merged = dict(recipe)
     deviations = {}
     for key, value in overrides.items():
+        if key in RECIPE_ENUM_KEYS:
+            # Issue #14b: enum keys validate against their allowed values; a
+            # wrong value or wrong type is refused rather than guessed.
+            v3c_value, choices = RECIPE_ENUM_KEYS[key]
+            if not (isinstance(value, str) and value in choices):
+                parser.error(f'--recipe key {key!r} must be one of {list(choices)}')
+            merged[key] = value
+            deviations[key] = {'v3c': v3c_value, 'declared': value}
+            continue
         expected = recipe[key]
         if isinstance(expected, bool):
             valid = isinstance(value, bool)
@@ -123,8 +149,9 @@ def main():
                         help='Roles config JSON with pre-registered A/B/C groups; required for grouped (non-legacy) runs')
     parser.add_argument('--recipe', default=None,
                         help='Grouped runs only: JSON file of recipe overrides over the v3c defaults from '
-                             'configs/v3c.json (e.g. {"lr": 1e-4}); deviations are echoed and appear in the '
-                             'printed Command. Refused with --legacy, which reproduces v3c unchanged')
+                             'configs/v3c.json (e.g. {"lr": 1e-4} or {"optimizer": "adamw8bit"}); deviations '
+                             'are echoed and appear in the printed Command. Refused with --legacy, which '
+                             'reproduces v3c unchanged')
     parser.add_argument('--data-dir', default=str(DEFAULT_DATA_DIR),
                         help='Data directory for the grouped structural preflight ONLY (train.jsonl + '
                              'calibration.jsonl; test.jsonl is never read). The actual run always reads the '

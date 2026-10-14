@@ -16,6 +16,10 @@ from model_utils import ROOT,TIERS,TYPES,QUESTIONS,load_engine,read_jsonl,reques
 FULLFT_INITIAL_LR=2e-6
 LR_FLOOR_FRACTION=.1
 SWA_POOL_SIZE=3
+# Issue #14b: bnb.optim.AdamW8bit quantizes only m/v state tensors with at
+# least this many elements to 8-bit; smaller tensors (heads, anchors) keep
+# exact 32-bit state. One constant shared by construction and effective_config.
+OPTIMIZER_MIN_8BIT_SIZE=16384
 
 
 def oversample_epoch_rows(train_rows):
@@ -77,7 +81,35 @@ def effective_initial_lr(args):
     # (official recipe) regardless of --lr; LoRA paths use --lr directly.
     # Reports must record this alongside the requested value (issue #14:
     # args.lr was previously reported as if it were in effect under fullft).
+    # Identical for BOTH optimizers (issue #14b): --optimizer never changes
+    # LR semantics, only how the m/v moments are stored.
     return FULLFT_INITIAL_LR if args.fullft else args.lr
+
+
+def ensure_optimizer_available(optimizer_name):
+    # Issue #14b fail-fast gate, run BEFORE any data/model/artifact work: a
+    # machine without bitsandbytes must neither load the 0.8B model nor create
+    # the append-only artifacts/<run>/ directory whose existence would then
+    # refuse the re-run. Never a silent fallback to adamw — that would
+    # impersonate the declared recipe in the report.
+    if optimizer_name=='adamw8bit':
+        try:import bitsandbytes  # noqa: F401 -- availability check only
+        except ImportError as error:raise SystemExit('bitsandbytes not installed; --optimizer adamw8bit requires it') from error
+
+
+def build_optimizer(optimizer_name,params,effective_lr):
+    """Issue #14b optimizer construction. adamw (the default) is byte-identical
+    to the pre-flag call: torch.optim.AdamW(lr=effective_lr, weight_decay=.01,
+    foreach=False). adamw8bit swaps the fp32 AdamW m/v moments for
+    bitsandbytes' 8-bit states (m/v ~3,800 -> ~950MiB on this 16GB GPU; fp32
+    AdamW fullft OOMs >15.8GiB, 8-bit lands ~9.7GiB) under IDENTICAL LR
+    semantics (fullft still fixes the initial LR at 2e-6). A missing
+    bitsandbytes install fails loudly instead of silently impersonating adamw."""
+    if optimizer_name=='adamw8bit':
+        try:import bitsandbytes as bnb
+        except ImportError as error:raise SystemExit('bitsandbytes not installed; --optimizer adamw8bit requires it') from error
+        return bnb.optim.AdamW8bit(params,lr=effective_lr,weight_decay=.01,min_8bit_size=OPTIMIZER_MIN_8BIT_SIZE)
+    return torch.optim.AdamW(params,lr=effective_lr,weight_decay=.01,foreach=False)
 
 
 def top_swa_epochs(history):
@@ -126,8 +158,13 @@ def effective_config(args,raw_train_rows,epoch_row_counts,scheduler_report,swa_p
     scheduler really used them); requested values are echoed under lr_* so
     effective and requested can never be conflated again."""
     initial=effective_initial_lr(args)
+    optimizer_name=getattr(args,'optimizer','adamw')
     block={'note':'effective vs requested: these values are what the run actually used; raw CLI input is preserved separately',
-           'recipe':{'epochs':args.epochs,'rank':args.rank,'accumulation':args.accumulation,'seed':args.seed,'beta':args.beta,'label_smoothing':args.label_smoothing,'synth':bool(args.synth),'mlp':bool(args.mlp),'fullft':bool(args.fullft),'swa':bool(args.swa)},
+           'recipe':{'epochs':args.epochs,'rank':args.rank,'accumulation':args.accumulation,'seed':args.seed,'beta':args.beta,'label_smoothing':args.label_smoothing,'synth':bool(args.synth),'mlp':bool(args.mlp),'fullft':bool(args.fullft),'swa':bool(args.swa),'optimizer':optimizer_name},
+           'optimizer':{'name':optimizer_name,'weight_decay':.01,
+                        # min_8bit_size only exists on the 8-bit path; None on
+                        # adamw so the field never implies quantization ran.
+                        'min_8bit_size':(OPTIMIZER_MIN_8BIT_SIZE if optimizer_name=='adamw8bit' else None)},
            'lr_effective':initial,'lr_requested':args.lr,
            'lr_note':('fullft fixes the initial LR at 2e-6 (official recipe); --lr is ignored under --fullft' if args.fullft else '--lr is used directly (LoRA path)'),
            'train_rows':{'pre_oversampling':raw_train_rows,'oversampled_per_epoch':epoch_row_counts},
@@ -339,6 +376,9 @@ def run(args):
     if legacy and roles_path:raise SystemExit('--legacy-calibration and --calibration-roles are mutually exclusive')
     if not legacy and not roles_path:raise SystemExit('New runs default to group-isolated calibration (issue #2): pass --calibration-roles with pre-registered A/B/C groups, or pass --legacy-calibration to reproduce the archived v3c recipe')
     if getattr(args,'structural_dry_run',False) and legacy:raise SystemExit('--structural-dry-run applies to grouped runs only')
+    # Issue #14b: refuse an un-runnable recipe before touching the model or
+    # creating the append-only artifacts/<run>/ directory.
+    ensure_optimizer_available(getattr(args,'optimizer','adamw'))
     random.seed(args.seed);torch.manual_seed(args.seed);torch.set_num_threads(4)
     output=ROOT/'artifacts'/args.run
     if legacy:output.mkdir(parents=True,exist_ok=True)
@@ -460,7 +500,7 @@ def run(args):
     effective_lr=effective_initial_lr(args)
     # Official XTuner recipe (configs/training/qwen35.py): lr 2e-6, cosine decay
     # to 2e-7, warmup 3%, wd 0.01. Our fullft path follows it; LoRA paths keep lr 1e-4.
-    optimizer=torch.optim.AdamW((p for p in model.parameters() if p.requires_grad),lr=effective_lr,weight_decay=.01,foreach=False)
+    optimizer=build_optimizer(getattr(args,'optimizer','adamw'),(p for p in model.parameters() if p.requires_grad),effective_lr)
     scheduler=None;scheduler_report={'type':'constant (no scheduler)','note':'LoRA paths keep the optimizer LR fixed'}
     if args.fullft:
         total_steps,warmup,scheduler_report=fullft_scheduler_plan(planned_updates,effective_lr)
@@ -657,6 +697,7 @@ def run(args):
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--run',default='real-history-v1');p.add_argument('--epochs',type=int,default=6);p.add_argument('--rank',type=int,default=8);p.add_argument('--lr',type=float,default=1e-4,help='LoRA initial learning rate; IGNORED under --fullft, which fixes the initial LR at 2e-6 (official recipe — effective_config records effective vs requested)');p.add_argument('--accumulation',type=int,default=8);p.add_argument('--seed',type=int,default=20261010);p.add_argument('--synth',action='store_true',help='merge data/synth/*.jsonl into train/calibration');p.add_argument('--beta',type=float,default=.999);p.add_argument('--mlp',action='store_true',help='extend LoRA to MLP and all attention output/input projections (deeper modification)');p.add_argument('--fullft',action='store_true',help='full fine-tune of the language backbone (deepest modification; vision tower stays frozen via LoRA-free path). LR schedule (issue #14): 3%% warmup + cosine over the OVERSAMPLED optimizer-update count (tail batch ceil), progress clamped to [0,1], decay floor at 10%% of the initial LR (2e-7; the archived v3c used a 1e-3 multiplier floor)');p.add_argument('--label-smoothing',type=float,default=.05);p.add_argument('--swa',action='store_true',help='average the 3 best epochs by selection macro-F1 (model soup guardrail; strict top-3 pool with eviction — issue #14)');p.add_argument('--smoke',action='store_true',help='short pipeline validation run: legacy = 24 train rows, 6+6 calibration rows, 1 epoch; grouped = 24 train rows + whole-group calibration sub-pool, 1 epoch (support gates never relaxed)')
     p.add_argument('--legacy-calibration',action='store_true',help='reproduce the archived v3c row-split calibration exactly (issue #2: explicit legacy; new runs default to group-isolated calibration)')
+    p.add_argument('--optimizer',default='adamw',choices=['adamw','adamw8bit'],help='optimizer over trainable params: adamw (default; byte-identical to the archived v3c) or adamw8bit (bitsandbytes 8-bit m/v states — trades exact AdamW moments for ~2.8GiB VRAM on this 16GB GPU; requires the RUNTIME-side bitsandbytes install and exits loudly when missing, never silently falls back). LR semantics identical: fullft fixes the initial LR at 2e-6 under both')
     p.add_argument('--calibration-roles',default=None,help='JSON file with pre-registered A/B/C role groups (+ optional support_policy/protocol); required for new runs')
     p.add_argument('--structural-dry-run',action='store_true',help='grouped runs: run the CPU structural preflight (no model, no artifacts, no test access) and exit')
     args=p.parse_args()

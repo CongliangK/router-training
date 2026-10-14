@@ -110,6 +110,7 @@ GitHub Actions 在 push 和 pull request 时执行这一 CPU 检查；CPU runner
 - **grouped 启动器显式传递完整配方**：legacy 与 grouped 的命令由同一 builder 从 `configs/v3c.json` 装配；分组 run 不再静默回退 `train_eval.py` 默认值（`synth`/`fullft`/`swa` 全关）。与 v3c 的偏差只能通过显式 `--recipe <json>` 声明（未知键或类型不符一律拒绝），偏差回显到控制台，`--dry-run` 的 Command 列出全部实际传递的配方 flag：`--run v4-dev --roles roles.json --recipe overrides.json --dry-run`。
 - **报告记录真实生效参数**：`report.json` 新增 `effective_config` 块——effective vs requested LR（fullft 无论 `--lr` 传什么都固定初始 LR 2e-6）、每 epoch 过采样后 update 数、尾批处理、调度器形状（总 update、warmup、钳制、下限）、SWA 池最终成员——与原始 CLI 输入分开记录。
 - **SWA 池严格 Top-3**：跌出选择 macro-F1 前三的 epoch 被逐出（释放其 CPU 快照引用）；soup 恒为最终前三的平均，每 epoch 的池打印行如实。
+- **optimizer 是被记录的配方选择**：`--optimizer` 可选 `adamw`（默认，与归档 v3c 逐字节一致）或 `adamw8bit`（经 `--recipe {"optimizer": "adamw8bit"}` 声明，记入 `effective_config`）；归档 v3c 用的是 adamw。8-bit 优化器状态以精确 AdamW 矩换取本 GPU 约 2.8GiB 显存（fp32 AdamW fullft 在 16GB 上 OOM；8-bit m/v 需求使整跑落在约 9.7GiB）。`bitsandbytes` 仅为训练机上的**运行侧可选依赖**——刻意不进 `requirements.txt` 与 CI，CI 在无 bnb 的环境保持全绿。
 
 独立推理服务：
 
