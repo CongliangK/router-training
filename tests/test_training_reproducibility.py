@@ -124,6 +124,24 @@ class SchedulerCurveTests(unittest.TestCase):
         self.assertEqual(te.FULLFT_INITIAL_LR, 2e-6)
         self.assertEqual(te.FULLFT_INITIAL_LR * te.LR_FLOOR_FRACTION, 2e-7)  # official-recipe floor
 
+    def test_reported_warmup_fraction_is_the_achieved_ratio_not_the_target(self):
+        # Red-team LOW-2: .03 is only the warmup TARGET; after int() truncation
+        # the achieved fraction differs, and the report must carry the real
+        # warmup/total ratio. Archived v3c shape: 6 epochs * 193 updates = 1158
+        # total, warmup = int(1158*.03) = 34, so 34/1158 ≈ 0.0294, NOT .03.
+        te = train_eval()
+        total, warmup, report = te.fullft_scheduler_plan(1158, 2e-6)
+        self.assertEqual((total, warmup), (1158, 34))
+        self.assertEqual(report['warmup_fraction_of_total'], 34 / 1158)
+        self.assertAlmostEqual(report['warmup_fraction_of_total'], 0.02936, places=4)
+        self.assertNotEqual(report['warmup_fraction_of_total'], .03)  # never the hardcoded target
+        self.assertEqual(report['lr_floor'], 2e-7)
+        # Tiny-run floor: warmup never drops below 1 step, and the fraction
+        # still reports the honest achieved ratio (1 of 3), not .03.
+        _, warmup1, report1 = te.fullft_scheduler_plan(3, 2e-6)
+        self.assertEqual(warmup1, 1)
+        self.assertEqual(report1['warmup_fraction_of_total'], 1 / 3)
+
 
 class EffectiveConfigTests(unittest.TestCase):
     """Defect 3: the report must record the LR that actually ran (fullft
@@ -302,6 +320,29 @@ class LauncherRecipeTests(unittest.TestCase):
                                 capture_output=True, text=True)
         self.assertNotEqual(legacy.returncode, 0)
         self.assertIn('--legacy reproduces', legacy.stderr)
+
+    def test_recipe_rejects_non_finite_numbers(self):
+        # Red-team LOW-1: json.loads parses the JSON NaN/Infinity literals into
+        # float nan/inf, which would poison optimizer hyperparameters and later
+        # report JSON. All three must exit through parser.error (rc=2) with
+        # nothing assembled; the message names the key and the reason but never
+        # echoes the value itself.
+        for literal in ['{"lr": NaN}', '{"lr": Infinity}', '{"lr": -Infinity}']:
+            path = self.data_dir / 'nonfinite.json'
+            path.write_text(literal)
+            refused = self._launch('--recipe', str(path))
+            self.assertEqual(refused.returncode, 2, literal)   # argparse parser.error exit
+            self.assertNotIn('Command:', refused.stdout)       # nothing was assembled
+            self.assertIn("'lr'", refused.stderr)              # key named
+            self.assertIn('finite', refused.stderr)            # reason given, no value echoed
+        # Finite float/int overrides keep flowing through unchanged.
+        finite = self.data_dir / 'finite.json'
+        finite.write_text(json.dumps({'lr': 1e-4, 'epochs': 3}))
+        accepted = self._launch('--recipe', str(finite))
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        command = command_from(accepted.stdout)
+        self.assertEqual(command[command.index('--lr') + 1], '0.0001')
+        self.assertEqual(command[command.index('--epochs') + 1], '3')
 
 
 if __name__ == '__main__':

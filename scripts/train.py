@@ -22,6 +22,7 @@ and the --dry-run Command lists every recipe flag actually passed.
 from pathlib import Path
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
@@ -66,8 +67,9 @@ def recipe_flags(recipe):
 def merged_recipe(recipe, overrides_path, parser):
     """v3c defaults + explicitly declared deviations (issue #14). The override
     file may carry only known recipe keys, each matching the v3c value's type
-    (bools are never confused with ints); anything else is refused rather
-    than guessed. Returns the merged recipe and the declared deviations."""
+    (bools are never confused with ints) and finite (JSON's NaN/Infinity
+    literals are refused); anything else is refused rather than guessed.
+    Returns the merged recipe and the declared deviations."""
     if overrides_path is None:
         return recipe, {}
     try:
@@ -93,6 +95,15 @@ def merged_recipe(recipe, overrides_path, parser):
         if not valid:
             parser.error(f'--recipe key {key!r} must match the v3c value type '
                          f'({expected!r}: {type(expected).__name__})')
+        # Red-team LOW-1: json.loads happily parses the JSON NaN/Infinity
+        # literals into float nan/inf, which would silently poison optimizer
+        # hyperparameters (lr=inf) and later report JSON. Ints cannot be
+        # non-finite, so only float values need the check. The value itself is
+        # deliberately NOT echoed — only the key and the reason — so a crafted
+        # override file cannot inject arbitrary text into the error path.
+        if isinstance(value, float) and not math.isfinite(value):
+            parser.error(f'--recipe key {key!r} must be a finite number; '
+                         'NaN and Infinity are not valid recipe values')
         merged[key] = value
         deviations[key] = {'v3c': expected, 'declared': value}
     return merged, deviations

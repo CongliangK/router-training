@@ -58,6 +58,20 @@ def cosine_lr_multiplier(step,total_steps,warmup):
     return max(LR_FLOOR_FRACTION,(1+math.cos(math.pi*progress))/2)
 
 
+def fullft_scheduler_plan(planned_updates,effective_lr):
+    # Scheduler plan + audit report for the fullft cosine path (issue #14).
+    # The .03 is the warmup TARGET fraction: after int() truncation and the
+    # max(1,..) floor the ACHIEVED fraction differs (e.g. the archived v3c
+    # shape — 6*193 = 1158 updates, warmup int(1158*.03) = 34 — achieves
+    # 34/1158 ≈ 0.0294), so the report records warmup/total_steps, never a
+    # hardcoded .03 that lied about every floored or truncated run
+    # (red-team LOW-2).
+    total_steps=max(1,planned_updates)
+    warmup=max(1,int(total_steps*.03))
+    report={'type':'cosine_with_warmup','total_optimizer_updates':total_steps,'warmup_updates':warmup,'warmup_fraction_of_total':warmup/total_steps,'cosine_progress_clamp':[0.,1.],'lr_floor_fraction_of_initial':LR_FLOOR_FRACTION,'lr_floor':effective_lr*LR_FLOOR_FRACTION,'counting_basis':'optimizer updates over class-balanced oversampled rows; per-epoch tail batch counted by ceil'}
+    return total_steps,warmup,report
+
+
 def effective_initial_lr(args):
     # The LR the optimizer ACTUALLY starts from: fullft fixes it at 2e-6
     # (official recipe) regardless of --lr; LoRA paths use --lr directly.
@@ -449,11 +463,9 @@ def run(args):
     optimizer=torch.optim.AdamW((p for p in model.parameters() if p.requires_grad),lr=effective_lr,weight_decay=.01,foreach=False)
     scheduler=None;scheduler_report={'type':'constant (no scheduler)','note':'LoRA paths keep the optimizer LR fixed'}
     if args.fullft:
-        total_steps=max(1,planned_updates)
-        warmup=max(1,int(total_steps*.03))
+        total_steps,warmup,scheduler_report=fullft_scheduler_plan(planned_updates,effective_lr)
         def _lr_lambda(step):return cosine_lr_multiplier(step,total_steps,warmup)
         scheduler=torch.optim.lr_scheduler.LambdaLR(optimizer,_lr_lambda)
-        scheduler_report={'type':'cosine_with_warmup','total_optimizer_updates':total_steps,'warmup_updates':warmup,'warmup_fraction_of_total':.03,'cosine_progress_clamp':[0.,1.],'lr_floor_fraction_of_initial':LR_FLOOR_FRACTION,'lr_floor':effective_lr*LR_FLOOR_FRACTION,'counting_basis':'optimizer updates over class-balanced oversampled rows; per-epoch tail batch counted by ceil'}
     # Effective-number class weights (Cui et al. 2019, beta=0.999) replace the
     # earlier sqrt inverse-frequency: the soft sqrt version under-corrected the
     # 76%-majority balanced class and left the vision positive class unweighted.
