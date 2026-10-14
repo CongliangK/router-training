@@ -7,6 +7,13 @@
 > `--legacy` 校准路线、与归档 v3c 相同的 seed 与 669 行训练数据
 > （469 真实 + 200 合成，tier 均衡过采样至 1542 行/epoch）。
 > 评估基准与 v3c 相同的冻结测试集（104 行、7 个独立组）。
+>
+> **数据可得性**：该运行的完整机器可读指标已按 v3c 同边界公开于
+> [`artifacts/rt-v4-e1-8bit-r2/`](../artifacts/rt-v4-e1-8bit-r2/)
+> （report / quality-gate / calibration / best-epoch 四个 JSON，不含逐行
+> 预测导出）；数据集因含真实个人 prompt 不可发布，其聚合画像（类分布、
+> 交叉表、组结构、已知偏斜、运行对照）见
+> [`docs/DATA-PROFILE.md`](../docs/DATA-PROFILE.md)。
 
 ## 1. 工程结论：8-bit 路径端到端可用（对 README 估计的实证）
 

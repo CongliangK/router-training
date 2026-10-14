@@ -4,6 +4,9 @@
 labels) is **not published** with this repository: even after automated redaction
 the prompts still describe identifiable personal projects. Everything you need to
 rebuild an equivalent dataset on your own task history is documented here.
+An **aggregate profile** of the frozen dataset (class distributions, cross-tabs,
+group structure, known skews, and a run-metrics comparison — no raw data) for
+analysis without the raw rows is in [DATA-PROFILE.md](DATA-PROFILE.md).
 
 ## Dataset layout expected by the pipeline
 
@@ -102,4 +105,6 @@ Worked example rows (clearly synthetic, format-only) are in
 （会话组 + 近重复簇不跨集），产出 train/calibration/test。自建流程：
 用 `extract.py` 从自己的多智能体会话日志只读提取并脱敏 → 按
 `data/labeling/RUBRIC.md` 标注四轮 → `prepare.py` 切分 → `scripts/train.py` 训练。
-格式示例见 `data/synthetic-examples/`。
+格式示例见 `data/synthetic-examples/`。冻结数据集的聚合画像（类分布、
+交叉表、组结构、已知偏斜与运行指标对照，不含原始数据）见
+[DATA-PROFILE.md](DATA-PROFILE.md)。

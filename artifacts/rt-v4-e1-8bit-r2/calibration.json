@@ -1,0 +1,29 @@
+{
+  "temperatures": {
+    "tier": 1.5,
+    "vision": 1,
+    "task_type": 2.747760550703
+  },
+  "tier_adjust": {
+    "fast": -0.0,
+    "balanced": -0.0,
+    "flagship": -0.0
+  },
+  "tier_adjust_tau": 0,
+  "tier_prior": {
+    "fast": 0.10612855007473841,
+    "balanced": 0.7683109118086696,
+    "flagship": 0.12556053811659193
+  },
+  "notes": {
+    "tier": {
+      "nll": 0.5223151823706947,
+      "rows": 48
+    },
+    "vision": {
+      "nll": 0.1308006205334222,
+      "rows": 47
+    },
+    "task_type": "missing classes; retained checkpoint temperature (not locally calibrated)"
+  }
+}

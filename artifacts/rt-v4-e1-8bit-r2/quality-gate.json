@@ -1,0 +1,10 @@
+{
+  "passed": false,
+  "mode": "shadow",
+  "reasons": [
+    "No independent candidate-model task-success benchmark has been collected.",
+    "Tau operating point missed the recall>=0.75 / FP<=0.10 gate; relaxed point in use.",
+    "Flagship under-routing exceeds 5%.",
+    "Vision false-negative rate exceeds 5%."
+  ]
+}
