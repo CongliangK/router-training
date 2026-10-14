@@ -51,10 +51,12 @@ in a full local checkout and the honest-limitations notes below.
 | Path | Purpose |
 |---|---|
 | `train_eval.py` | LoRA / full-backbone training, calibration, evaluation, quality gate |
+| `calibration_groups.py` | Stdlib-only group-isolated calibration planning and out-of-fold tau/T selection (issue #2) |
 | `model_utils.py` | Fixed-option decision logits, 8K context, shared train/serve truncation |
 | `prepare.py`, `extract.py` | Read-only prompt extraction, redaction, grouped train/calibration/test splitting |
 | `server.py`, `policy.py`, `routes.json` | Optional standalone FastAPI inference server |
-| `scripts/train.py` | Safe launcher for the archived v3c recipe (refuses to overwrite runs) |
+| `scripts/train.py` | Safe launcher: explicit `--legacy` (archived v3c recipe) or grouped mode with pre-registered roles |
+| `scripts/validate_calibration.py` | Pure-CPU anonymous structural validation of a roles config (never reads test data) |
 | `configs/v3c.json` | Exact CLI recipe of the completed run |
 | `tests/` | CPU-only unit tests (run without a GPU) |
 | `data/labeling/RUBRIC.md` | Tier/vision/task-type labeling rubric |
@@ -90,13 +92,71 @@ with the original assertions; skips do not establish private-archive integrity.
 No real prompts, labels, or private fingerprints are required or distributed.
 
 Download the pinned base model revision into `models/intern-decision-0.8b`
-(see below), then reproduce the archived run under a new name:
+(see below), then reproduce the archived run under a new name (the row-split
+calibration is explicit `--legacy`; it reproduces v3c exactly and is not the
+default for new runs):
 
 ```sh
-.venv/bin/python scripts/train.py --run v3c-reproduction --dry-run   # inspect only
-.venv/bin/python scripts/train.py --run v3c-reproduction             # full 6-epoch run
-.venv/bin/python scripts/train.py --run v3c-smoke --smoke            # GPU smoke test
+.venv/bin/python scripts/train.py --run v3c-reproduction --legacy --dry-run   # inspect only
+.venv/bin/python scripts/train.py --run v3c-reproduction --legacy             # full 6-epoch run
+.venv/bin/python scripts/train.py --run v3c-smoke --legacy --smoke            # GPU smoke test
 ```
+
+### Group-isolated calibration for new runs (issue #2)
+
+External review P1-3 / [issue #2](https://github.com/CongliangK/router-training/issues/2):
+the archived recipe shuffled the calibration split **by row** into
+selection/fitting halves. Task ids are unique, but near-duplicate tasks from
+one source share a `split_group`, so a row bisection puts correlated rows on
+both sides; with only ~8 recorded calibration groups, no re-split of rows can
+fix that — reuse is not addressed by another seed.
+
+New runs therefore default to a strict, pre-registered grouping in
+`calibration_groups.py` (stdlib-only, importable without torch):
+
+- **Roles A/B/C are pre-registered** in a roles JSON (`role_groups` plus
+  optional `support_policy`/`protocol`). A = checkpoint selection rows,
+  B = temperature/tau fitting rows, C = reserved for final configuration
+  selection. Groups and ids are mutually exclusive across roles and must
+  cover every calibration row; a missing role is a hard failure with **no
+  seed-based fallback**.
+- **Support gates fail closed.** Example gates (provisional, *not* frozen by
+  any user decision): ≥5/6/5 groups for A/B/C, ≥5 rows and ≥2 groups per
+  required-head class per region, ≥2 groups per class in every B-fold
+  training union. Vision stays a required head — preflight never silently
+  downgrades to tier-only. `task_type` is optional: without support its
+  temperature stays at T=1 and is reported as not calibrated (the legacy
+  2.747 fallback is never used).
+- **Tau is selected by deterministic 3-fold GroupKFold over B** (groups
+  sorted by row count, sha256 tiebreak, whole groups never split; every B row
+  is a holdout exactly once). Per tau, each fold first applies
+  `z − tau·log(prior)` to its training rows, *then* fits that fold's
+  temperatures, then scores the holdout with the same formula; groups are
+  equally weighted throughout. A holdout fold missing a class yields a null
+  score (never a fake 0); if no tau is feasible, nothing is selected. After
+  selection, temperatures are refit once on all of B and the result binds
+  plan/prior/schema/protocol/checkpoint hashes. This is a development
+  estimate, not an unbiased evaluation.
+- **Priors come from real unique train rows only** (synthetic augmentation
+  and repeated ids excluded; a class without support is a hard error).
+- **The old row-split halves remain available only as explicit legacy**
+  (`--legacy-calibration`), byte-for-byte, for v3c reproduction. Grouped dev
+  runs never open the test split; a `--structural-dry-run` (or
+  `scripts/train.py --dry-run` in grouped mode) runs the real CPU preflight —
+  no model, no artifacts, no test access:
+
+```sh
+.venv/bin/python scripts/train.py --run v4-dev --roles roles.json --dry-run
+.venv/bin/python scripts/validate_calibration.py --roles roles.json --data-dir data
+```
+
+Output summaries are counts-only (no group names, ids, labels, or prompts).
+**Status:** the archived calibration pool cannot satisfy the example gates
+(roughly eight groups, some classes concentrated in very few of them — see
+issue #2), so no grouped run can be instantiated with current data. The
+gates are not relaxed to make it pass; additional group-isolated development
+data is required. Full dev-no-test for training and the approved numeric
+protocol are not yet satisfied — this repo does not claim training readiness.
 
 Standalone inference server:
 
@@ -156,6 +216,10 @@ All pipeline code runs unchanged on your own dataset once it matches the schema.
 - The v3c quality gate is intentionally left un-passed; reasons are recorded in
   `quality-gate.json` (missing task-success benchmark, tau gate miss, flagship
   over-promotion).
+- The archived calibration split bisects rows (groups leak across the
+  selection/fitting halves); it is preserved under explicit `--legacy` for
+  reproduction, and new runs use the group-isolated path above — which the
+  current data cannot yet instantiate (issue #2).
 - Several training-implementation quirks of the archived run (effective initial
   LR 2e-6 vs CLI default, SWA pool semantics, non-group-isolated calibration
   halves) are documented rather than silently "fixed", so the recipe reproduces
