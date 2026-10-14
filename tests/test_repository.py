@@ -7,9 +7,13 @@ import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from synthetic_data import synthetic_splits, supplemental_rows, SPLIT_NAMES
 
 
 class RepositoryTests(unittest.TestCase):
+    @unittest.skipUnless((ROOT / 'snapshot-manifest.json').is_file(),
+                         'Optional private archive validation: snapshot manifest is not distributed')
     def test_training_core_matches_archived_source(self):
         manifest = json.loads((ROOT / 'snapshot-manifest.json').read_text())
         for name in ['train_eval.py', 'model_utils.py', 'prepare.py']:
@@ -40,6 +44,21 @@ class RepositoryTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Output already exists', result.stderr)
 
+    def test_supplemental_rows_are_separate_from_generated_splits(self):
+        tasks, splits, _ = synthetic_splits()
+        primary = [row for rows in splits.values() for row in rows]
+        supplemental = supplemental_rows()
+        self.assertEqual(len(primary), len(tasks))
+        self.assertEqual(len(supplemental), 200)
+        self.assertEqual(len({r['id'] for r in supplemental}), 200)
+        self.assertEqual(len({r['prompt'] for r in supplemental}), 200)
+        self.assertFalse({r['prompt'] for r in primary} & {r['prompt'] for r in supplemental})
+        self.assertFalse({r['id'] for r in primary} & {r['id'] for r in supplemental})
+        self.assertTrue(all(r['synthetic'] for r in primary + supplemental))
+
+    @unittest.skipUnless(all((ROOT / 'data' / f'{name}.jsonl').is_file() for name in SPLIT_NAMES)
+                         and (ROOT / 'data/synth').is_dir(),
+                         'Optional private archive validation: real splits and synthetic augmentation are not distributed')
     def test_synthetic_rows_are_separate_from_real_splits(self):
         real = [json.loads(line) for name in ['train', 'calibration', 'test']
                 for line in (ROOT / 'data' / (name + '.jsonl')).read_text().splitlines()]

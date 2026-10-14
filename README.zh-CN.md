@@ -45,13 +45,28 @@
 
 ## 快速开始
 
-需要 Python ≥ 3.11、CUDA GPU（全参训练峰值约 15GB）与匹配驱动的 PyTorch CUDA 构建。
+需要 Python ≥ 3.11。训练需要 CUDA GPU（全参训练峰值约 15GB）与匹配驱动的 PyTorch CUDA 构建；CPU 单元测试不需要 GPU 或模型权重。
 
 ```sh
 python -m venv --system-site-packages .venv
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m unittest discover -s tests -v
 ```
+
+### 公开 checkout 验证（发布标准）
+
+全新公开 clone 必须能安装原样的 `requirements.txt` 并运行
+`python -m unittest discover -s tests -v` 全绿，无需私有文件、GPU 或权重。
+GitHub Actions 在 push 和 pull request 时执行这一 CPU 检查；CPU runner
+也保留固定的 CUDA 构建依赖，不替换为 CPU 版本。
+
+公开测试在临时目录生成明确标注的合成数据，经 `prepare.py` 验证切分计数、
+完整 ID 覆盖、ID/组互斥，以及与合成补充样本的分离。fixture 的计数
+（120 条主样本、200 条补充样本）不是历史 668 条数据集。
+缺少私有资产时，另三项归档验证会明确 **skip**：真实切分计数/互斥、
+真实与合成样本 prompt 分离，以及 `snapshot-manifest.json` 中的源码校验和。
+资产存在时仍执行原断言；skip 不代表已验证私有归档完整性。
+测试不要求或分发真实 prompt、标签或私有指纹。
 
 先下载固定 revision 的基座模型放入 `models/intern-decision-0.8b/`（权重不入 Git），然后：
 
