@@ -37,6 +37,17 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         for flag in ['--fullft', '--synth', '--swa', '--legacy-calibration']:
             self.assertIn(flag, result.stdout)
+        # Issue #14: the dry-run Command must show the COMPLETE recipe actually
+        # passed (numerics included), with each flag bound to its v3c value.
+        import ast
+        command = ast.literal_eval(
+            result.stdout.split('Command: ', 1)[1].strip().splitlines()[0])
+        recipe = json.loads((ROOT / 'configs/v3c.json').read_text())
+        for key in ['epochs', 'rank', 'lr', 'accumulation', 'seed', 'beta', 'label_smoothing']:
+            flag = '--' + key.replace('_', '-')
+            self.assertIn(flag, command)
+            self.assertEqual(command[command.index(flag) + 1], str(recipe[key]), key)
+        self.assertNotIn('--mlp', command)
         self.assertFalse((ROOT / 'artifacts/repository-validation-only').exists())
 
     def test_launcher_refuses_overwriting_winner(self):

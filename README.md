@@ -55,7 +55,7 @@ in a full local checkout and the honest-limitations notes below.
 | `model_utils.py` | Fixed-option decision logits, 8K context, shared train/serve truncation |
 | `prepare.py`, `extract.py` | Read-only prompt extraction, redaction, grouped train/calibration/test splitting |
 | `server.py`, `policy.py`, `routes.json` | Optional standalone FastAPI inference server |
-| `scripts/train.py` | Safe launcher: explicit `--legacy` (archived v3c recipe) or grouped mode with pre-registered roles |
+| `scripts/train.py` | Safe launcher: explicit `--legacy` (archived v3c recipe) or grouped mode with pre-registered roles; both pass the full v3c recipe explicitly, grouped deviations via `--recipe` (issue #14) |
 | `scripts/validate_calibration.py` | Pure-CPU anonymous structural validation of a roles config (never reads test data) |
 | `configs/v3c.json` | Exact CLI recipe of the completed run |
 | `tests/` | CPU-only unit tests (run without a GPU) |
@@ -93,8 +93,9 @@ No real prompts, labels, or private fingerprints are required or distributed.
 
 Download the pinned base model revision into `models/intern-decision-0.8b`
 (see below), then reproduce the archived run under a new name (the row-split
-calibration is explicit `--legacy`; it reproduces v3c exactly and is not the
-default for new runs):
+calibration is explicit `--legacy`; it reproduces the v3c recipe and
+calibration split — note that the issue #14 scheduler/SWA correctness fixes
+mean a re-run's LR trajectory now differs from the archived run, see below):
 
 ```sh
 .venv/bin/python scripts/train.py --run v3c-reproduction --legacy --dry-run   # inspect only
@@ -186,6 +187,42 @@ gates are not relaxed to make it pass; additional group-isolated development
 data is required. Full dev-no-test for training and the approved numeric
 protocol are not yet satisfied — this repo does not claim training readiness.
 
+### Training reproducibility fixes (issue #14)
+
+Four audited defects are fixed for **future runs**; the archived v3c artifacts
+are frozen history and are not touched:
+
+- **The scheduler counts actual optimizer updates.** `total_steps` is derived
+  from the class-balanced oversampled row stream — the same precomputed lists
+  the training loop iterates (one source of truth) — with each epoch's tail
+  batch counted by ceil. The archived run planned 498 steps from the raw
+  pre-oversampling length while actually taking 1,158 updates. Cosine progress
+  is clamped to [0, 1] so the LR can never rise again past the planned end,
+  and the decay floor is **10% of the initial LR** (2e-7 for fullft, matching
+  the official recipe; the archived run used a 1e-3 multiplier floor — see
+  `--fullft` help and the README.zh-CN §复现要点 note). Warmup stays 3%.
+  **Future runs therefore follow a different LR curve than the archived v3c**
+  — including `--legacy` reproductions under current code; the archived v3c
+  numbers are old-scheduler history and must not be compared LR-trajectory to
+  LR-trajectory with new runs (legacy reports carry this note explicitly).
+- **The grouped launcher passes the complete recipe.** `scripts/train.py`
+  assembles legacy and grouped commands from one shared builder reading
+  `configs/v3c.json`; a grouped run no longer silently falls back to
+  `train_eval.py` defaults (`synth`/`fullft`/`swa` off). Deviations from v3c
+  are declared only via an explicit `--recipe <json>` override (unknown or
+  wrongly-typed keys are refused), echoed to the console, and the `--dry-run`
+  Command lists every recipe flag actually passed:
+  `--run v4-dev --roles roles.json --recipe overrides.json --dry-run`.
+- **The report records what actually ran.** `report.json` gains an
+  `effective_config` block — effective vs requested LR (fullft fixes the
+  initial LR at 2e-6 regardless of `--lr`), per-epoch oversampled update
+  counts, tail-batch handling, scheduler shape (total updates, warmup, clamp,
+  floor), and the final SWA pool members — kept separate from raw CLI input.
+- **The SWA pool is a strict top-3.** Epochs that fall out of the top-3 by
+  selection macro-F1 are evicted and their CPU snapshots released; the soup
+  is always exactly the final top-3 average, and the pool print line is
+  truthful at every epoch.
+
 Standalone inference server:
 
 ```sh
@@ -248,10 +285,14 @@ All pipeline code runs unchanged on your own dataset once it matches the schema.
   selection/fitting halves); it is preserved under explicit `--legacy` for
   reproduction, and new runs use the group-isolated path above — which the
   current data cannot yet instantiate (issue #2).
-- Several training-implementation quirks of the archived run (effective initial
-  LR 2e-6 vs CLI default, SWA pool semantics, non-group-isolated calibration
-  halves) are documented rather than silently "fixed", so the recipe reproduces
-  what actually produced the checkpoint. See README.zh-CN.md §复现要点.
+- Training-implementation defects found by later audit (scheduler step count
+  from the raw length, unclamped cosine with a 1e-3 floor, fullft LR
+  misreporting, over-filled SWA pool, grouped launcher dropping the recipe)
+  are fixed for future runs ([issue #14](https://github.com/CongliangK/router-training/issues/14));
+  the archived v3c artifacts keep the old behavior, so its LR trajectory is
+  **not comparable** with new runs. The non-group-isolated calibration halves
+  remain only under explicit `--legacy` (see above). See README.zh-CN.md
+  §复现要点.
 - No optimizer resume; interrupted runs restart from scratch. Bit-exact
   reproduction across GPUs/driver versions is not guaranteed.
 
