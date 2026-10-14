@@ -46,10 +46,14 @@ def binomial_lower_bound(k,n,confidence=.95):
     """One-sided exact Clopper-Pearson lower bound: the L solving P(Bin(n,L)>=k)=alpha, alpha=1-confidence.
 
     L(0,n)=0 and n=0 -> 0.0 (no trials: no evidence; callers keep such candidates
-    pending instead of crashing). L(n,n)=alpha**(1/n) closed form. Stable by
-    construction: log-pmf through lgamma plus a tail summed by term-ratio recursion —
-    the naive math.comb(n,k)*p**k*(1-p)**(n-k) tail overflows float at n>=1030
-    (red-team probe: stable sf(515,1030,.5)=0.5124275650 while the naive sum raises
+    pending instead of crashing). L(n,n)=alpha**(1/n) closed form. Numerics:
+    log-space pmfs via lgamma; the term-ratio tail recursion must start at the
+    first representable tail term (log-pmf >= -700, located by bisecting the
+    unimodal pmf) because seeding it at k underflowed to 0.0 whenever
+    |k-n*p|>>sqrt(n) at a bisection midpoint (red-team round 1: the first probe is
+    m=0.5, so any k far from n/2 crashed, e.g. L(18,1671)); the naive
+    math.comb(n,k)*p**k*(1-p)**(n-k) tail overflows float at n>=1030 (red-team
+    probe: stable sf(515,1030,.5)=0.5124275650 while the naive sum raises
     OverflowError), and 200 bisection halves converge far below float resolution.
     Verified anchors at 95% one-sided: L(3,3)=0.3684031499, L(28,28)=0.8985342644,
     L(29,29)=0.9018553723, L(49,50)=0.9086018693, L(99,100)=0.9534401885.
@@ -63,11 +67,46 @@ def binomial_lower_bound(k,n,confidence=.95):
     if n==0 or k==0:return 0.0
     alpha=1.0-confidence
     if k==n:return alpha**(1.0/n)
+    def log_pmf(i,p):return math.lgamma(n+1)-math.lgamma(i+1)-math.lgamma(n-i+1)+i*math.log(p)+(n-i)*math.log1p(-p)
     def survival(p):  # P(Bin(n,p)>=k) for the fixed 0<k<n
-        log_t=math.lgamma(n+1)-math.lgamma(k+1)-math.lgamma(n-k+1)+k*math.log(p)+(n-k)*math.log1p(-p)
-        t=math.exp(log_t);s=t
-        for i in range(k+1,n+1):
-            t*=(n-i+1.0)/i*(p/(1.0-p));s+=t
+        if p<=0.0:return 0.0
+        if p>=1.0:return 1.0
+        # Red-team round 1: seeding the tail recursion at k underflows (math.exp of
+        # a log-pmf below ~-745 gives 0.0, and every ratio-multiplied term stays
+        # 0.0) whenever |k-n*p|>>sqrt(n) at a bisection midpoint; the first probe is
+        # m=0.5, so any k far from n/2 took the wrong branch until lo hit exactly
+        # 1.0 and math.log1p(-1.0) raised ValueError. Fix: start the float recursion
+        # at the first tail term with log-pmf >= -700 (>= 9.9e-305, representable).
+        # The binomial pmf is unimodal in i and nondecreasing on [0, floor((n+1)p)],
+        # so that first representable index is found by bisecting the climb [k, mode].
+        mode=min(n,int((n+1)*p))
+        if log_pmf(k,p)>=-700.0:start=k
+        elif k>=mode or log_pmf(mode,p)<-700.0:
+            # k is past the mode, or even the modal term underflows: every tail term
+            # is < e^-700, so the whole tail is < n*e^-700 < 1e-296 for n <= 1e7 --
+            # hundreds of orders below any representable alpha, and 0.0 therefore
+            # selects the same bisection branch (survival << alpha either way).
+            return 0.0
+        else:
+            lo_i,hi_i=k,mode
+            while hi_i-lo_i>1:  # leftmost tail index whose term is representable
+                if log_pmf((lo_i+hi_i)//2,p)>=-700.0:hi_i=(lo_i+hi_i)//2
+                else:lo_i=(lo_i+hi_i)//2
+            start=hi_i
+        # Skipped terms (k..start-1) are each < e^-700 (~1e-304) and fewer than n of
+        # them exist, so the dropped mass is < n*e^-700 < 1e-296 for n <= 1e7 --
+        # negligible against any representable alpha (>= ~1e-16 in practice) and
+        # against the 1e-9 tolerance of every verified anchor below.
+        t=math.exp(log_pmf(start,p));s=t;ratio=p/(1.0-p)
+        for i in range(start+1,n+1):
+            t*=(n-i+1.0)/i*ratio;s+=t
+            # Past the mode the term ratio (n-i)/(i+1)*p/(1-p) decreases strictly in
+            # i, so once the next ratio is <= 0.5 the whole remaining geometric tail
+            # is < t; cutting the loop when t < 1e-17*s therefore drops < 1e-17
+            # relative mass (orders below the lgamma rounding noise) and keeps huge-n
+            # probes O(sqrt(n)) instead of O(n) (n=1e6 grid rows cost ~10s each
+            # without this cut).
+            if t<1e-17*s and (n-i)*ratio<0.5*(i+1):break
         return s
     lo,hi=0.0,1.0
     for _ in range(200):
@@ -181,7 +220,7 @@ def import_outcomes(tasks,records,routes,min_trials=3,min_success_lb=.9,confiden
             # flag them, never reject, never discount the sample size (adjudication).
             audit=['duplicate-artifact-hash'] if counts[r['artifact_sha256']]>1 else []
             details.append({'task_id':task_id,'route_fingerprint':fingerprint,'trial':r['trial'],'passed':r['passed'],'failure_type':r.get('failure_type'),'cost':r['cost'],'latency_ms':r['latency_ms'],'input_tokens':r['input_tokens'],'output_tokens':r['output_tokens'],'artifact_sha256':r['artifact_sha256'],'execution_id':r['execution_id'],'context_sha256':r['context_sha256'],'wall_time':r['wall_time'],'timeout':r['timeout'],'seed':r.get('seed'),'randomness_policy':r.get('randomness_policy'),'audit_flags':audit})
-    alpha=1.0-confidence
+    alpha=round(1.0-confidence,12)  # display-only record: kills the 1.0-0.95=0.050000000000000044 float residue; the bound itself computes its own exact 1.0-confidence
     result={'schema_version':2,'labels':labels,'pending':pending,'candidate_metrics':stats,'trial_details':details,
         'minimum_trials':min_trials,'minimum_success_lb':min_success_lb,'confidence':confidence,
         'bound':{'method':BOUND_METHOD,'confidence':confidence,'alpha':alpha,'side':'lower','threshold':min_success_lb,

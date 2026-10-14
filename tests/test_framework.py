@@ -1,4 +1,4 @@
-import json,re,subprocess,sys,tempfile,unittest
+import json,math,re,subprocess,sys,tempfile,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 ROOT=Path(__file__).resolve().parents[1]
@@ -176,6 +176,87 @@ class FrameworkTests(unittest.TestCase):
         self.assertAlmostEqual(binomial_lower_bound(515,1030),0.4739127365,delta=1e-9)
         self.assertAlmostEqual(binomial_lower_bound(600,1200),0.4758609796,delta=1e-9)
         self.assertAlmostEqual(binomial_lower_bound(1030,1030),0.9970957476,delta=1e-9)
+    def test_binomial_lower_bound_underflow_crash_samples(self):
+        # Red-team round 1 crash probes: the old survival() seeded the tail recursion
+        # at k with math.exp(log-pmf), which underflowed to 0.0 whenever |k-n*m|>>sqrt(n)
+        # at a bisection midpoint (the first probe is m=0.5, so any k far from n/2 hit
+        # it); every ratio-multiplied term stayed 0.0, the comparison took the wrong
+        # branch, lo climbed to exactly 1.0 and math.log1p(-1.0) raised ValueError.
+        # All ten must return the exact bound (L(18,1671)=0.006973702932 was the
+        # red-team truth; clamping p to nextafter(1,0) instead returns ~1.0 here --
+        # anti-conservative -- and is forbidden).
+        expected={(1,5000):1.0258606257579484e-05,(10,100000):5.425502668687073e-05,
+            (18,1671):0.006973702932312538,(122,1938):0.054114311616993926,
+            (968,4525):0.20392346320147764,(1000,10000):0.09510201345758967,
+            (5100,10000):0.5017259958859535,(11000,20000):0.5441836121635442,
+            (100000,1000000):0.09950689981835192,(900000,1000000):0.8995051880047098}
+        for (k,n),value in sorted(expected.items()):
+            with self.subTest(k=k,n=n):self.assertAlmostEqual(binomial_lower_bound(k,n),value,delta=1e-9)
+    def test_binomial_lower_bound_cross_domain_grid(self):
+        # n from 1e3 to 1e6 across k/n from 1% to 99%: exercises both failure regimes
+        # of the old seed-at-k recursion (k far below the n*0.5 probe mean, and k far
+        # above it). Reference values were recomputed offline with an independent
+        # Lentz continued-fraction implementation of the regularized incomplete beta
+        # I_p(k,n-k+1) (Numerical Recipes 6.4 form; P(Bin(n,p)>=k)=I_p(k,n-k+1)),
+        # itself cross-validated against exact integer bisection (worst |diff|
+        # 2.2e-15 for n<=1030) and the closed forms alpha**(1/n) / 1-(1-alpha)**(1/n).
+        grid=[(10,1000,0.005435140144707218),(50,1000,0.03916353592559227),(100,1000,0.0847847676684707),
+            (200,1000,0.17936802936486268),(300,1000,0.27612277115901307),(400,1000,0.3742608818457236),
+            (490,1000,0.4635447859344053),(500,1000,0.4735177312356933),(600,1000,0.5738234133353124),
+            (800,1000,0.7780485668004171),(900,1000,0.8830084679036372),(990,1000,0.9830968248794381),
+            (100,10000,0.008420198936744627),(500,10000,0.04646251581727112),(1000,10000,0.09510201345758967),
+            (2000,10000,0.19343573137648307),(3000,10000,0.29245606166578675),(4000,10000,0.39191417088439406),
+            (4900,10000,0.4817303023091203),(5000,10000,0.4917265044037602),(6000,10000,0.5918710999575174),
+            (8000,10000,0.79330629306576),(9000,10000,0.894928883412784),(9900,10000,0.9882027660286605),
+            (1000,100000,0.009487997257329153),(5000,100000,0.048871018372585645),(10000,100000,0.09844313756279766),
+            (20000,100000,0.19792085021877326),(30000,100000,0.2976156858085911),(40000,100000,0.3974489691870199),
+            (49000,100000,0.487395016670811),(50000,100000,0.4973942822602452),(60000,100000,0.5974446845651196),
+            (80000,100000,0.7979079892027103),(90000,100000,0.8984259722276746),(99000,100000,0.9894667990993229),
+            (10000,1000000,0.009836888398168375),(50000,1000000,0.04964197535683336),(100000,1000000,0.09950689981835192),
+            (200000,1000000,0.19934220069112008),(300000,1000000,0.2992461617633737),(400000,1000000,0.39919390418324086),
+            (490000,1000000,0.4891772598379899),(500000,1000000,0.4991770739496548),(600000,1000000,0.5991934764421705),
+            (800000,1000000,0.7993409172422248),(900000,1000000,0.8995051880047098),(990000,1000000,0.9898347860179992)]
+        for k,n,value in grid:
+            with self.subTest(k=k,n=n):self.assertAlmostEqual(binomial_lower_bound(k,n),value,delta=1e-9)
+    def test_binomial_lower_bound_matches_exact_integer_bisection(self):
+        # Live independent cross-check inside the suite: dyadic bisection on
+        # p=j/2**80 where every survival evaluation is a pure big-integer tail sum
+        # (math.comb(n,i)*j**i*(2**80-j)**(n-i)) compared exactly against
+        # 2**(80n)/20 -- no floating point until the final conversion. Any
+        # divergence beyond bisection+float noise (>1e-9) means the lgamma/recursion
+        # path changed semantics, not just numerics.
+        for k,n in [(2,29),(9,43),(17,57)]:
+            lo,hi=0,1<<80
+            for _ in range(80):
+                mid=(lo+hi)//2
+                tail=sum(math.comb(n,i)*mid**i*((1<<80)-mid)**(n-i) for i in range(k,n+1))
+                if 20*tail>=1<<(80*n):hi=mid
+                else:lo=mid
+            self.assertAlmostEqual(binomial_lower_bound(k,n),hi/2.0**80,delta=1e-9)
+    def test_seed_and_randomness_policy_validation_and_envelope(self):
+        # M9 red-team blind spot: deleting the seed/randomness_policy validation used
+        # to leave the suite green. Valid values must pass through into the audit
+        # envelope; invalid ones must fail closed.
+        records=fixtures()
+        for row in records:
+            if row['trial']==0:row['seed']=42
+            if row['trial']==1:row['randomness_policy']='provider-seeded'
+            if row['trial']==2:row['seed']='run-2026'
+        result=import_outcomes([{'id':'task'}],records,DEFAULT_ROUTES)
+        seeded=[detail for detail in result['trial_details'] if detail['seed']==42]
+        policy=[detail for detail in result['trial_details'] if detail['randomness_policy']=='provider-seeded']
+        strseed=[detail for detail in result['trial_details'] if detail['seed']=='run-2026']
+        unset=[detail for detail in result['trial_details'] if detail['trial']>2]
+        self.assertEqual({detail['trial'] for detail in seeded},{0});self.assertEqual(len(seeded),3)
+        self.assertEqual({detail['trial'] for detail in policy},{1});self.assertEqual(len(policy),3)
+        self.assertEqual({detail['trial'] for detail in strseed},{2});self.assertEqual(len(strseed),3)
+        self.assertTrue(all(detail['seed'] is None and detail['randomness_policy'] is None for detail in unset))
+        for bad in [True,3.5,'','   ','x'*201]:
+            bad_records=fixtures();bad_records[3]['seed']=bad
+            with self.assertRaisesRegex(ValueError,'Invalid execution seed'):import_outcomes([{'id':'task'}],bad_records,DEFAULT_ROUTES)
+        for bad in [5,True,'','   ','y'*201]:
+            bad_records=fixtures();bad_records[3]['randomness_policy']=bad
+            with self.assertRaisesRegex(ValueError,'Invalid randomness policy'):import_outcomes([{'id':'task'}],bad_records,DEFAULT_ROUTES)
     def test_zero_trial_candidate_is_pending_not_crashing(self):
         result=import_outcomes([{'id':'task'}],[],DEFAULT_ROUTES)
         self.assertEqual(result['labels'],[]);self.assertEqual(result['pending'],[{'id':'task','reason':'incomplete-candidate-trials'}])
@@ -186,6 +267,8 @@ class FrameworkTests(unittest.TestCase):
         self.assertEqual(result['bound']['method'],'clopper_pearson_exact_one_sided_lower')
         self.assertEqual(result['bound']['coverage'],'per-candidate marginal, no simultaneous guarantee')
         self.assertEqual(result['bound']['side'],'lower');self.assertEqual(result['bound']['threshold'],.9)
+        # alpha is recorded (display-only) without the 1.0-0.95 float residue: exactly 0.05.
+        self.assertEqual(result['bound']['alpha'],.05)
         self.assertEqual(result['preregistration']['rule'],{'min_trials':3,'min_success_lb':.9,'confidence':.95})
         self.assertTrue(re.fullmatch('[a-f0-9]{64}',result['preregistration']['routes_fingerprint']))
         self.assertIn('estimand',result)
