@@ -9,13 +9,24 @@ DEFAULT_ROUTES=[
 
 def validate_routes(routes):
     if not isinstance(routes,list) or not routes:raise ValueError('Routes must be a nonempty list')
-    seen=set()
+    seen=set();ids=set()
     for route in routes:
         if not isinstance(route,dict) or route.get('tier') not in TIERS or type(route.get('vision')) is not bool:raise ValueError('Invalid route capability declaration')
         if not all(isinstance(route.get(key),str) and route[key].strip() for key in ['provider','model']):raise ValueError('Invalid provider/model pair')
         pair=(route['provider'],route['model'])
         if pair in seen:raise ValueError('Duplicate route declaration')
         seen.add(pair)
+        # Issue #7: optional execution metadata annotates the operating point only;
+        # the (provider,model) uniqueness above stays the serving identity that
+        # server.select() depends on. Unknown keys remain tolerated (existing behavior).
+        for key in ['model_version','reasoning_effort','route_id']:
+            value=route.get(key)
+            if value is None:continue
+            if not isinstance(value,str) or not value.strip() or len(value)>200:raise ValueError('Invalid route execution metadata')
+        route_id=route.get('route_id')
+        if route_id is not None:
+            if route_id in ids:raise ValueError('Duplicate route id declaration')
+            ids.add(route_id)
     return routes
 
 
