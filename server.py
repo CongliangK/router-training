@@ -16,10 +16,35 @@ class DecisionRequest(BaseModel):
     has_image:bool=False
 
 
-def create_app(run='real-history-v1',routes=None,minimum_confidence=.9,collect_prompts=False):
+def read_gate(path):
+    # A missing or malformed gate must never become permission through truthiness.
+    try:gate=json.loads(path.read_text())
+    except FileNotFoundError:return {'passed':False,'mode':'shadow','status':'missing'}
+    except (OSError,ValueError):return {'passed':False,'mode':'shadow','status':'invalid'}
+    if not isinstance(gate,dict) or type(gate.get('passed')) is not bool:
+        return {'passed':False,'mode':'shadow','status':'invalid'}
+    if gate['passed'] and gate.get('mode')!='qualified':
+        return {'passed':False,'mode':'shadow','status':'invalid'}
+    return {**gate,'mode':'qualified' if gate['passed'] else 'shadow',
+            'status':'passed' if gate['passed'] else 'not-passed'}
+
+
+def record_observation(record):
+    observations=ROOT/'observations';observations.mkdir(exist_ok=True)
+    with (observations/'decisions.jsonl').open('a') as file:file.write(json.dumps(record,ensure_ascii=False)+'\n')
+
+
+def create_app(run='real-history-v1',routes=None,minimum_confidence=.9,collect_prompts=False,mode='diagnostic'):
     artifacts=ROOT/'artifacts'/run;state={};lock=threading.Lock()
     routes=validate_routes(routes if routes is not None else DEFAULT_ROUTES)
     if not 0<=minimum_confidence<=1:raise ValueError('Invalid minimum confidence')
+    if mode not in ('diagnostic','execution'):raise ValueError('Invalid service mode')
+    def contract(recommendation_available=True):
+        gate=state.get('gate',{'passed':False,'mode':'shadow','status':'not-loaded'})
+        allowed='engine' in state and mode=='execution' and gate['passed'] is True and recommendation_available
+        return {'schema_version':2,'mode':mode,'quality_gate_passed':gate['passed'],
+                'quality_gate_mode':gate['mode'],'quality_gate_status':gate['status'],
+                'execution_allowed':allowed,'advisory_only':not allowed}
     @asynccontextmanager
     async def lifespan(app):
         full=artifacts/'full-checkpoint'
@@ -30,39 +55,47 @@ def create_app(run='real-history-v1',routes=None,minimum_confidence=.9,collect_p
         calibration=json.loads((artifacts/'calibration.json').read_text())
         state['temperatures']=calibration['temperatures']
         state['adjustments']={'tier':calibration['tier_adjust']} if calibration.get('tier_adjust') else None
-        state['gate']=json.loads((artifacts/'quality-gate.json').read_text())
+        state['gate']=read_gate(artifacts/'quality-gate.json')
         state['run']=run
         yield
         state.clear()
     app=FastAPI(title='User Mode local decision router',lifespan=lifespan)
     @app.get('/health')
-    def health():return {'ready':'engine' in state,'run':run,'quality_gate':state.get('gate',{'passed':False}),'history_model_labels_used':False}
+    def health():return {'ready':'engine' in state,'run':run,**contract(),
+                         'quality_gate':state.get('gate',{'passed':False,'mode':'shadow','status':'not-loaded'}),
+                         'history_model_labels_used':False}
     @app.post('/route')
     def route(request:DecisionRequest):
-        if 'engine' not in state:raise HTTPException(503,'Model not loaded')
+        if 'engine' not in state:raise HTTPException(503,{'reason':'model-not-loaded',**contract(False)})
+        if mode=='execution' and not contract()['execution_allowed']:
+            raise HTTPException(503,{'reason':'quality-gate-not-qualified',**contract(False)})
         start=time.perf_counter()
         with lock:
             prediction=score(state['engine'],request.prompt,state['temperatures'],state.get('adjustments'))
             decision=select(prediction,routes or DEFAULT_ROUTES,request.has_image,minimum_confidence)
-            result={'schema_version':1,'mode':'shadow' if not state['gate']['passed'] else 'qualified',
-                'quality_gate_passed':state['gate']['passed'],'run':run,
+            permission=contract(decision['recommendation'] is not None)
+            if mode=='execution' and not permission['execution_allowed']:
+                raise HTTPException(503,{'reason':'no-authorized-recommendation',**permission,'reasons':decision['reasons']})
+            if decision['recommendation'] is not None:
+                decision['recommendation']={**decision['recommendation'],
+                    'execution_allowed':permission['execution_allowed'],'advisory_only':permission['advisory_only']}
+            result={**permission,'run':run,
                 'tier':prediction['answers']['tier']['choice'],'tier_confidence':prediction['answers']['tier']['confidence'],
                 'vision_probability':prediction['answers']['vision']['probabilities']['yes'],
                 'task_type':prediction['answers']['task_type']['choice'],
                 'task_type_confidence':prediction['answers']['task_type']['confidence'],
                 'context_truncated':prediction['context_truncated'],
                 **decision,'latency_ms':round((time.perf_counter()-start)*1000,2)}
-            observations=ROOT/'observations';observations.mkdir(exist_ok=True)
             record={'time':time.time(),'prompt_sha256':hashlib.sha256(request.prompt.encode()).hexdigest(),**result}
             if collect_prompts:record['prompt']=redact(request.prompt)
-            with (observations/'decisions.jsonl').open('a') as file:file.write(json.dumps(record,ensure_ascii=False)+'\n')
+            record_observation(record)
             return result
     return app
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('--run',default='real-history-v1');p.add_argument('--port',type=int,default=19948);p.add_argument('--collect-prompts',action='store_true');p.add_argument('--routes',type=Path);p.add_argument('--minimum-confidence',type=float,default=.9)
+    p=argparse.ArgumentParser();p.add_argument('--run',default='real-history-v1');p.add_argument('--port',type=int,default=19948);p.add_argument('--collect-prompts',action='store_true');p.add_argument('--routes',type=Path);p.add_argument('--minimum-confidence',type=float,default=.9);p.add_argument('--mode',choices=['diagnostic','execution'],default='diagnostic')
     args=p.parse_args()
     if not args.run.replace('-','').replace('_','').isalnum():raise SystemExit('Invalid run name')
     if not 0<=args.minimum_confidence<=1:raise SystemExit('Invalid confidence threshold')
     routes=json.loads(args.routes.read_text()) if args.routes else DEFAULT_ROUTES
-    uvicorn.run(create_app(args.run,routes,args.minimum_confidence,args.collect_prompts),host='127.0.0.1',port=args.port,log_level='info')
+    uvicorn.run(create_app(args.run,routes,args.minimum_confidence,args.collect_prompts,args.mode),host='127.0.0.1',port=args.port,log_level='info')
