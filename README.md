@@ -231,7 +231,11 @@ are frozen history and are not touched:
   OOMs 16GB; the 8-bit m/v demand lands the run at ~9.7GiB). `bitsandbytes`
   is an optional RUNTIME-side dependency of the training machine only — it
   is deliberately absent from `requirements.txt` and CI, which stays green
-  without it.
+  without it. A real full validation run (3 epochs, same seed and data as
+  v3c) confirmed these estimates end-to-end — measured stability, throughput
+  parity, and VRAM headroom, plus evaluation-methodology evidence for
+  issues #1–#5, are distilled in
+  [research/fullft-8bit-run-lessons.md](research/fullft-8bit-run-lessons.md).
 
 Standalone inference server:
 
