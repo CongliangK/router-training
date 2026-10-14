@@ -37,6 +37,7 @@
 | `model_utils.py` | 固定选项决策 logits、8K 上下文、训练/服务一致截断 |
 | `prepare.py`、`extract.py` | 只读历史提取、脱敏及分组切分 |
 | `server.py`、`policy.py`、`routes.json` | 可选独立推理 API（FastAPI） |
+| `outcomes.py` | 动态 routes 的候选结果导入，以保守精确 Clopper-Pearson 下界作门（issue #7） |
 | `scripts/train.py` | 安全启动器：显式 `--legacy`（v3c 归档配方）或预注册分组的分组模式；两模式都显式传递完整 v3c 配方，分组偏差经 `--recipe` 声明（issue #14） |
 | `scripts/validate_calibration.py` | 纯 CPU 匿名结构校验（绝不读取 test 数据） |
 | `configs/v3c.json` | 完整 run 的精确 CLI 配方 |
@@ -136,6 +137,56 @@ curl http://127.0.0.1:19949/health
 v3c 归档模型是 **shadow，不是生产合格模型**；历史服务切换或 `ready: true`
 均不等于质量门通过。本契约不修改模型、质量门归档或实际部署。
 
+### 候选结果标注（issue #7）
+
+外部审查 P1-4 / [issue #7](https://github.com/CongliangK/router-training/issues/7)：
+`outcomes.py` 原先写死候选 routes，并把 3/3 成功率点估计当作可选依据——但 3/3
+全过几乎不能说明真实成功率。当前先把管线改对（尚无新流量可采）；测试中的
+fixture 全为纯合成，本工具不发起任何真实候选调用。
+
+```sh
+.venv/bin/python outcomes.py --tasks tasks.jsonl --outcomes outcomes.jsonl \
+    --output labels.json --routes routes.json   # 换任意 routes.json，无需改代码
+```
+
+- **动态 routes。** 候选来自显式 `--routes` 文件。缺省解析为仓库 `routes.json`；
+  仅当该文件不存在才回退公开 `DEFAULT_ROUTES` 并在输出中记录警告。显式指定的
+  路径缺失则 fail-fast（对齐 server.py 语义），绝不静默换默认。route 声明可选
+  `model_version`、`reasoning_effort`、`route_id` 元信息（有校验、`route_id`
+  唯一；`(provider, model)` 服务身份与 `server.select()` 契约不变）；记录的
+  实测版本/effort 与声明不符即拒绝，按另一 operating point 另行导入。
+- **保守门。** 候选可选的判据是成功率的**单侧精确 Clopper-Pearson 下界**越过
+  阈值——绝不是点估计。95% 已验证锚点：3/3 → 0.3684031499（不给标签），
+  28/28 → 0.898534（仍不给），29/29 → 0.9018553723（过 0.9 门的最小全过 n），
+  49/50 → 0.9086018693。`min_trials`（默认 3）只计试验完整性，不是可靠性门。
+  下界用 lgamma 对数 pmf + 项比递推计算（朴素 `math.comb` 尾和在 n ≥ 1030 时
+  浮点溢出）；`--min-success-lb` 取代旧的 `--min-success-rate`（语义变更：阈值
+  作用于下界），新增 `--confidence`。阈值 0.9/0.95 是沿用 issue 现值的建议
+  默认，非用户冻结的生产协议。
+- **保守门的代价如实写明。** 若候选真实成功率恰为 0.9，29 次独立执行全部
+  通过的概率只有 0.0471——过门是强证据，也是昂贵的证据。
+- **序贯偷看披露。** 出现一次失败后继续做仍可能过门（L(99,100)=0.9534401885
+  ≥ 0.9），因此每候选试验数 n 与候选集合必须先于执行预注册（输出的
+  `preregistration` 字段记录 routes 指纹）；做到过门为止地加 n 是序贯偷看，
+  不是确证。
+- **coverage 声明。** 该下界是每候选 marginal——跨候选无同时（simultaneous）
+  保证、无选择后保证；过门不等于"认证最便宜/最安全"。门通过者之间的选择保持
+  预声明确定性 tie-break（均值成本、均值延迟、档位序）作用于全部试验均值；
+  刻意不选下界最高者。
+- **严格失败语义与审计信封。** `passed: false` 必须带 `failure_type`
+  （`timeout`/`acceptance`/`execution_error`/`other`）；通过的试验不得携带；
+  超时即失败。每条试验携带唯一 `execution_id`（重复即拒——一次执行只计一次）、
+  任务内必须一致的 `context_sha256`、`wall_time`/`timeout`、可选
+  seed/randomness 策略，以及 16 位十六进制 `route_fingerprint`（对
+  [provider, model, tier, model_version, reasoning_effort] 的 sha256）。不同
+  执行产物字节完全相同是合法的——确定性任务可使独立执行产出一致——只标记
+  `duplicate-artifact-hash` 审计旗标，绝不拒绝、不折减样本量；nonce 或新
+  execution_id 不得改产物本体伪造独立。
+- **隐私边界与 estimand。** `trial_details` 仅为本地审计文件保留；绝不粘贴进
+  issue、PR 或任何公开产物——公开材料只能放纯合成粗聚合。estimand 是固定
+  被评任务集上 harness 独立执行的单次执行成功率：不外推新任务群体，不声称
+  生产收益。
+
 ### 基座与权重
 
 基座 `internlm/Intern-Decision-0.8B`，固定 revision，加载不启用 remote model code。`.safetensors` 等大权重被 Git 忽略、**不在本仓库分发**：请从上游 Hugging Face（Apache-2.0）下载固定 revision，或复制本地权重后训练。基座推理代码、tokenizer、配置及上游许可证保留在 Git 中。
@@ -162,6 +213,7 @@ seed 20261010、accumulation 8、label smoothing 0.05、beta 0.999、`--fullft -
 2. 归档 run 的 SWA 池未剔除跌出前三的 epoch（「三个最佳 epoch」注释与实现不符，池可超员）；**当前代码已改为严格 Top-3 逐出**。归档 v3c 的 soup 未胜出，最终选择单独 **epoch 4**（历史结果不变）。
 3. 校准集按随机行分为 selection/fitting 两半，未再按组隔离（组会跨半泄漏，issue #2）；bootstrap 是实现层面重采样，不是真实任务成功证据。该行为仅在显式 `--legacy-calibration` 下原样保留，新 run 默认按组隔离（见上节）。
 4. 无 optimizer resume，中断需重跑；相同参数不保证跨 GPU/依赖版本逐位一致。
+5. 尚无任何真实候选执行数据：`outcomes.py`（issue #7）只用纯合成 fixture 定义并 CPU 验证导入管线，不声称真实成功率、成本节省或生产收益。
 
 ## 许可证
 

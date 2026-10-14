@@ -55,6 +55,7 @@ in a full local checkout and the honest-limitations notes below.
 | `model_utils.py` | Fixed-option decision logits, 8K context, shared train/serve truncation |
 | `prepare.py`, `extract.py` | Read-only prompt extraction, redaction, grouped train/calibration/test splitting |
 | `server.py`, `policy.py`, `routes.json` | Optional standalone FastAPI inference server |
+| `outcomes.py` | Dynamic-routes candidate-outcome import gated by a conservative exact Clopper-Pearson lower bound (issue #7) |
 | `scripts/train.py` | Safe launcher: explicit `--legacy` (archived v3c recipe) or grouped mode with pre-registered roles; both pass the full v3c recipe explicitly, grouped deviations via `--recipe` (issue #14) |
 | `scripts/validate_calibration.py` | Pure-CPU anonymous structural validation of a roles config (never reads test data) |
 | `configs/v3c.json` | Exact CLI recipe of the completed run |
@@ -253,6 +254,70 @@ permission from the old field. The archived v3c is **shadow, not production
 qualified**; a historical service switch or `ready: true` does not pass its gate.
 No model, gate artifact, or deployment is changed by this contract.
 
+### Candidate outcome labels (issue #7)
+
+External review P1-4 / [issue #7](https://github.com/CongliangK/router-training/issues/7):
+`outcomes.py` used hardcoded routes and treated a 3/3 success-rate point estimate as
+selectable — but 3/3 all-pass says almost nothing about true success. The import
+pipeline is now fixed first (no new traffic exists to collect yet); all fixtures in
+tests are purely synthetic and no real candidate calls are made by this tool.
+
+```sh
+.venv/bin/python outcomes.py --tasks tasks.jsonl --outcomes outcomes.jsonl \
+    --output labels.json --routes routes.json   # any routes.json; no code change
+```
+
+- **Dynamic routes.** Candidates come from an explicit `--routes` file. The default
+  resolves to the repository `routes.json`; only if that file is absent does it fall
+  back to the public `DEFAULT_ROUTES` and record a warning in the output. An
+  explicitly given path that is missing fails fast (server.py semantics) — never a
+  silent default substitution. Route entries may declare optional `model_version`,
+  `reasoning_effort`, and `route_id` metadata (validated, `route_id` unique; the
+  `(provider, model)` serving identity and `server.select()` contract are unchanged);
+  a record whose measured version or effort disagrees with the declaration is
+  rejected as a different operating point.
+- **Conservative gate.** A candidate is selectable only when the *one-sided exact
+  Clopper-Pearson lower bound* of its success rate clears the threshold — never the
+  point estimate. Verified anchors at 95%: 3/3 → 0.3684031499 (no label), 28/28 →
+  0.898534 (still no label), 29/29 → 0.9018553723 (the smallest all-pass n that
+  clears 0.9), 49/50 → 0.9086018693. `min_trials` (default 3) counts trial
+  completeness only and is not a reliability gate. The bound is computed with
+  lgamma log-pmfs and term-ratio recursion because naive `math.comb` tails overflow
+  float at n ≥ 1030; `--min-success-lb` replaces the old `--min-success-rate`
+  (semantic change: the threshold now applies to the lower bound), and `--confidence`
+  is new. The thresholds 0.9/0.95 are suggested defaults carried over from the
+  issue's current values — not a user-frozen production protocol.
+- **Conservative cost, stated honestly.** If a candidate's true success rate is
+  exactly 0.9, the probability that 29 independent executions all pass is only
+  0.0471 — clearing this gate is strong evidence, and an expensive one.
+- **Sequential-peeking disclosure.** After one failure the gate can still be cleared
+  by continuing (L(99,100) = 0.9534401885 ≥ 0.9), so the per-candidate trial count n
+  and the candidate set are pre-registered before execution (the output's
+  `preregistration` field records the routes fingerprint); growing n until the bound
+  clears is sequential peeking, not confirmation.
+- **Coverage statement.** The bound is per-candidate marginal — no simultaneous
+  guarantee across candidates and no post-selection guarantee; passing it does not
+  certify a candidate as the cheapest or safest overall. Selection among gate-passers
+  keeps the preregistered deterministic tie-break (mean cost, mean latency, tier
+  order) over all-trials means; it deliberately does not pick the highest lower bound.
+- **Strict failure semantics and audit envelope.** `passed: false` requires a
+  `failure_type` (`timeout` / `acceptance` / `execution_error` / `other`); a passed
+  trial cannot carry one; a timeout is a failure. Every trial carries a unique
+  `execution_id` (duplicates rejected — one execution counts once), a
+  `context_sha256` that must be stable within a task, `wall_time`/`timeout`, optional
+  seed/randomness policy, and a 16-hex `route_fingerprint` (sha256 of
+  [provider, model, tier, model_version, reasoning_effort]). Identical artifact bytes
+  across distinct executions are legal — deterministic tasks can make independent
+  runs coincide — and only raise a `duplicate-artifact-hash` audit flag, never a
+  rejection or a sample-size discount; a nonce or fresh execution_id must never
+  mutate the artifact body to fake distinct executions.
+- **Privacy boundary and estimand.** `trial_details` are execution evidence for
+  local audit files only; never paste them into issues, PRs, or any public artifact
+  — public material may carry only purely synthetic coarse aggregates. The estimand
+  is the single-execution success rate of harness-independent executions on the
+  fixed evaluated task set: no extrapolation to new task populations and no
+  production-benefit claim.
+
 ### Base model & weights
 
 The base is `internlm/Intern-Decision-0.8B` pinned to revision
@@ -295,6 +360,9 @@ All pipeline code runs unchanged on your own dataset once it matches the schema.
   §复现要点.
 - No optimizer resume; interrupted runs restart from scratch. Bit-exact
   reproduction across GPUs/driver versions is not guaranteed.
+- No real candidate-execution data exists yet: `outcomes.py` (issue #7) defines and
+  CPU-validates the import pipeline with purely synthetic fixtures; no real success
+  rates, cost savings, or production benefits are claimed.
 
 ## License
 
