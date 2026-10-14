@@ -108,7 +108,7 @@ def build_optimizer(optimizer_name,params,effective_lr):
     if optimizer_name=='adamw8bit':
         try:import bitsandbytes as bnb
         except ImportError as error:raise SystemExit('bitsandbytes not installed; --optimizer adamw8bit requires it') from error
-        return bnb.optim.AdamW8bit(params,lr=effective_lr,weight_decay=.01,min_8bit_size=OPTIMIZER_MIN_8BIT_SIZE,foreach=False)
+        return bnb.optim.AdamW8bit(params,lr=effective_lr,weight_decay=.01,min_8bit_size=OPTIMIZER_MIN_8BIT_SIZE)
     return torch.optim.AdamW(params,lr=effective_lr,weight_decay=.01,foreach=False)
 
 

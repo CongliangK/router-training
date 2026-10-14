@@ -335,7 +335,8 @@ class OptimizerChoiceTests(unittest.TestCase):
             optimizer = te.build_optimizer('adamw8bit', ['p-a', 'p-b'], 2e-6)
         self.assertEqual(calls, [{'name': 'adamw8bit', 'params': ['p-a', 'p-b'],
                                   'kwargs': {'lr': 2e-6, 'weight_decay': .01,
-                                             'min_8bit_size': 16384, 'foreach': False}}])
+                                             'min_8bit_size': 16384}}])
+        self.assertNotIn('foreach', calls[0]['kwargs'])  # real bitsandbytes 0.50.x rejects foreach
         self.assertEqual(te.OPTIMIZER_MIN_8BIT_SIZE, 16384)  # single truth with effective_config
         self.assertEqual(optimizer[0], 'adamw8bit')
         self.assertTrue(all(call['name'] != 'adamw' for call in calls))  # no silent fallback
