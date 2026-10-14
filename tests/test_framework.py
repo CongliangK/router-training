@@ -4,6 +4,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from extract import redact
 from policy import select,DEFAULT_ROUTES
 from outcomes import import_outcomes
+from synthetic_data import synthetic_splits, SPLIT_NAMES
 
 
 def prediction(tier='fast',vision='no',confidence=.99,truncated=False):
@@ -60,6 +61,26 @@ class FrameworkTests(unittest.TestCase):
     def test_changed_acceptance_criteria_is_rejected(self):
         records=fixtures();records[1]['acceptance_spec_sha256']='c'*64
         with self.assertRaises(ValueError):import_outcomes([{'id':'task'}],records)
+    def test_generated_split_groups_and_ids_are_disjoint(self):
+        tasks,splits,report=synthetic_splits()
+        for a,b in [('train','calibration'),('train','test'),('calibration','test')]:
+            self.assertFalse({r['id'] for r in splits[a]}&{r['id'] for r in splits[b]})
+            self.assertFalse({r['split_group'] for r in splits[a]}&{r['split_group'] for r in splits[b]})
+        self.assertEqual({name:len(rows) for name,rows in splits.items()}, {'train':80,'calibration':20,'test':20})
+        self.assertEqual(sum(map(len,splits.values())),120)
+        rows=[r for split in splits.values() for r in split]
+        self.assertEqual({r['id'] for r in rows},{r['id'] for r in tasks})
+        self.assertEqual(len({r['id'] for r in rows}),len(rows))
+        self.assertEqual(report['independent_groups'],12)
+        self.assertTrue(report['group_disjoint'])
+        self.assertEqual(report['cross_root_near_duplicate_edges'],0)
+        for name in SPLIT_NAMES:
+            self.assertEqual(report['splits'][name]['rows'],len(splits[name]))
+            self.assertEqual(set(report['splits'][name]['groups']),{r['split_group'] for r in splits[name]})
+        self.assertTrue(all(r['synthetic'] for r in rows))
+
+    @unittest.skipUnless(all((Path(__file__).resolve().parents[1]/'data'/f'{name}.jsonl').is_file() for name in SPLIT_NAMES),
+                         'Optional private archive validation: real split files are not distributed')
     def test_actual_split_groups_and_ids_are_disjoint(self):
         root=Path(__file__).resolve().parents[1]/'data';splits={name:[json.loads(s) for s in (root/f'{name}.jsonl').read_text().splitlines()] for name in ['train','calibration','test']}
         for a,b in [('train','calibration'),('train','test'),('calibration','test')]:

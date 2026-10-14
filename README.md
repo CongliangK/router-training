@@ -63,14 +63,31 @@ in a full local checkout and the honest-limitations notes below.
 
 ## Getting started
 
-Requires Python ≥ 3.11, a CUDA GPU (full fine-tuning peaks ~15GB), and a
-CUDA-matched PyTorch build.
+Requires Python ≥ 3.11. Training needs a CUDA GPU (full fine-tuning peaks ~15GB)
+and a CUDA-matched PyTorch build; CPU unit tests need neither a GPU nor model weights.
 
 ```sh
 python -m venv --system-site-packages .venv
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m unittest discover -s tests -v
 ```
+
+### Public-checkout validation (release standard)
+
+A fresh public clone must install the unchanged `requirements.txt` and pass
+`python -m unittest discover -s tests -v` without private files, a GPU, or weights.
+GitHub Actions runs this CPU-only check on pushes and pull requests. The pinned
+CUDA-capable dependencies are retained, even on a CPU runner.
+
+The public tests generate explicitly synthetic data in temporary directories and
+exercise `prepare.py`, checking split counts, complete ID coverage, ID/group isolation,
+and separation from synthetic augmentation. Fixture counts (120 primary rows and
+200 supplemental rows) are not the archived 668-row dataset. Three additional
+archive checks are explicitly **skipped** when their private assets are absent:
+real split counts/isolation, real-versus-synthetic prompt separation, and source
+checksums from `snapshot-manifest.json`. When present, these assets are validated
+with the original assertions; skips do not establish private-archive integrity.
+No real prompts, labels, or private fingerprints are required or distributed.
 
 Download the pinned base model revision into `models/intern-decision-0.8b`
 (see below), then reproduce the archived run under a new name:
