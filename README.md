@@ -223,6 +223,15 @@ are frozen history and are not touched:
   selection macro-F1 are evicted and their CPU snapshots released; the soup
   is always exactly the final top-3 average, and the pool print line is
   truthful at every epoch.
+- **The optimizer is a recorded recipe choice.** `--optimizer` selects
+  `adamw` (default; byte-identical to the archived v3c) or `adamw8bit`,
+  declared via `--recipe {"optimizer": "adamw8bit"}` and recorded in
+  `effective_config`; the archived v3c used adamw. 8-bit optimizer states
+  trade exact AdamW moments for ~2.8GiB VRAM on this GPU (fp32 AdamW fullft
+  OOMs 16GB; the 8-bit m/v demand lands the run at ~9.7GiB). `bitsandbytes`
+  is an optional RUNTIME-side dependency of the training machine only — it
+  is deliberately absent from `requirements.txt` and CI, which stays green
+  without it.
 
 Standalone inference server:
 

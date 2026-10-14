@@ -15,9 +15,11 @@ import random
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from collections import Counter
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -59,6 +61,40 @@ def command_from(stdout):
     """Parse the launcher's printed `Command: [...]` list literal."""
     line = next(l for l in stdout.splitlines() if l.startswith('Command:'))
     return ast.literal_eval(line[len('Command:'):].strip())
+
+
+def stub_optimizer_ctors():
+    """Attach a recording torch.optim to the shared torch stub (the loader in
+    test_calibration_groups ships none) and return (train_eval, call log).
+    Every ctor call lands in the log as {'name', 'params', 'kwargs'}."""
+    te = train_eval()
+    optim = types.ModuleType('torch.optim')
+    calls = []
+
+    def _record(name):
+        def _ctor(params, **kwargs):
+            calls.append({'name': name, 'params': list(params), 'kwargs': kwargs})
+            return (name, 'fixture-optimizer')
+        return _ctor
+
+    optim.AdamW = _record('adamw')
+    te.torch.optim = optim
+    return te, calls
+
+
+def fake_bitsandbytes(calls):
+    """Stub bitsandbytes whose optim.AdamW8bit records into the SAME call log;
+    injected via sys.modules so build_optimizer's lazy import finds it with no
+    real bnb install anywhere in the test suite (CI stays bnb-free)."""
+    bnb = types.ModuleType('bitsandbytes')
+    bnb.optim = types.ModuleType('bitsandbytes.optim')
+
+    def _adamw8bit(params, **kwargs):
+        calls.append({'name': 'adamw8bit', 'params': list(params), 'kwargs': kwargs})
+        return ('adamw8bit', 'fixture-optimizer')
+
+    bnb.optim.AdamW8bit = _adamw8bit
+    return bnb
 
 
 class SchedulerStepCountTests(unittest.TestCase):
@@ -185,6 +221,22 @@ class EffectiveConfigTests(unittest.TestCase):
         self.assertNotIn('archived_v3c_divergence_note',
                          train_eval().effective_config(self._args(), 28, [48, 48], {}, []))
 
+    def test_effective_config_records_the_optimizer_choice(self):
+        # Issue #14b: the recipe echo carries the optimizer name, and a
+        # dedicated block records construction facts (min_8bit_size exists
+        # only on the 8-bit path; None on adamw so it never implies
+        # quantization ran).
+        te = train_eval()
+        config = te.effective_config(self._args(), raw_train_rows=28, epoch_row_counts=[48],
+                                     scheduler_report={'type': 'constant (no scheduler)'}, swa_pool=[])
+        self.assertEqual(config['recipe']['optimizer'], 'adamw')  # default without the flag
+        self.assertEqual(config['optimizer'], {'name': 'adamw', 'weight_decay': .01, 'min_8bit_size': None})
+        config8 = te.effective_config(self._args(optimizer='adamw8bit'), raw_train_rows=28,
+                                      epoch_row_counts=[48], scheduler_report={}, swa_pool=[])
+        self.assertEqual(config8['recipe']['optimizer'], 'adamw8bit')
+        self.assertEqual(config8['optimizer']['min_8bit_size'], te.OPTIMIZER_MIN_8BIT_SIZE)
+        json.dumps(config8)  # fully serializable into report.json
+
 
 class SwaPoolTests(unittest.TestCase):
     """Defect 4: strict top-3 pool with eviction; soup = final top-3 average."""
@@ -258,6 +310,62 @@ class SwaPoolTests(unittest.TestCase):
         soup = te.soup_state_dict(current, avg)
         self.assertEqual(soup['w'].value, 6.0)                  # the average is what gets loaded
         self.assertIs(soup['bias'], current['bias'])            # non-pooled keys keep the live state
+
+
+class OptimizerChoiceTests(unittest.TestCase):
+    """Issue #14b: --optimizer is a recorded recipe choice. The adamw default
+    keeps the exact pre-flag torch.optim.AdamW call; adamw8bit constructs
+    bitsandbytes' AdamW8bit under identical LR semantics; a missing bnb
+    install fails loudly — never a silent adamw fallback. Pure CPU stubs:
+    no real bitsandbytes, no model, no GPU."""
+
+    def test_default_adamw_construction_is_unchanged(self):
+        te, calls = stub_optimizer_ctors()
+        with mock.patch.dict(sys.modules):
+            sys.modules.pop('bitsandbytes', None)  # hermetic absence
+            optimizer = te.build_optimizer('adamw', ['p-a', 'p-b'], 1e-4)
+        self.assertEqual(calls, [{'name': 'adamw', 'params': ['p-a', 'p-b'],
+                                  'kwargs': {'lr': 1e-4, 'weight_decay': .01, 'foreach': False}}])
+        self.assertNotIn('min_8bit_size', calls[0]['kwargs'])  # byte-identical old call shape
+        self.assertEqual(optimizer[0], 'adamw')
+
+    def test_adamw8bit_constructs_bitsandbytes_adamw8bit_with_exact_arguments(self):
+        te, calls = stub_optimizer_ctors()
+        with mock.patch.dict(sys.modules, {'bitsandbytes': fake_bitsandbytes(calls)}):
+            optimizer = te.build_optimizer('adamw8bit', ['p-a', 'p-b'], 2e-6)
+        self.assertEqual(calls, [{'name': 'adamw8bit', 'params': ['p-a', 'p-b'],
+                                  'kwargs': {'lr': 2e-6, 'weight_decay': .01,
+                                             'min_8bit_size': 16384, 'foreach': False}}])
+        self.assertEqual(te.OPTIMIZER_MIN_8BIT_SIZE, 16384)  # single truth with effective_config
+        self.assertEqual(optimizer[0], 'adamw8bit')
+        self.assertTrue(all(call['name'] != 'adamw' for call in calls))  # no silent fallback
+
+    def test_adamw8bit_without_bitsandbytes_fails_loudly_and_touches_nothing(self):
+        te, calls = stub_optimizer_ctors()
+        with mock.patch.dict(sys.modules):
+            sys.modules.pop('bitsandbytes', None)
+            with self.assertRaises(SystemExit) as caught:
+                te.ensure_optimizer_available('adamw8bit')
+            self.assertIn('bitsandbytes not installed; --optimizer adamw8bit requires it',
+                          str(caught.exception))
+            with self.assertRaises(SystemExit) as caught:
+                te.build_optimizer('adamw8bit', ['p'], 1e-4)
+            self.assertIn('bitsandbytes not installed; --optimizer adamw8bit requires it',
+                          str(caught.exception))
+        self.assertEqual(calls, [])  # neither ctor ran; the model is never touched
+        # adamw needs no bitsandbytes and keeps working.
+        te.ensure_optimizer_available('adamw')
+        te.build_optimizer('adamw', ['p'], 1e-4)
+        self.assertEqual([call['name'] for call in calls], ['adamw'])
+
+    def test_fullft_lr_semantics_are_identical_across_optimizers(self):
+        te, calls = stub_optimizer_ctors()
+        args = argparse.Namespace(fullft=True, lr=1e-4)
+        self.assertEqual(te.effective_initial_lr(args), 2e-6)  # --lr ignored under fullft
+        with mock.patch.dict(sys.modules, {'bitsandbytes': fake_bitsandbytes(calls)}):
+            te.build_optimizer('adamw8bit', ['p'], te.effective_initial_lr(args))
+        te.build_optimizer('adamw', ['p'], te.effective_initial_lr(args))
+        self.assertEqual([call['kwargs']['lr'] for call in calls], [2e-6, 2e-6])
 
 
 class LauncherRecipeTests(unittest.TestCase):
@@ -343,6 +451,34 @@ class LauncherRecipeTests(unittest.TestCase):
         command = command_from(accepted.stdout)
         self.assertEqual(command[command.index('--lr') + 1], '0.0001')
         self.assertEqual(command[command.index('--epochs') + 1], '3')
+
+    def test_recipe_optimizer_override_declares_and_forwards_the_flag(self):
+        # Issue #14b: {"optimizer": "adamw8bit"} reaches the train_eval.py
+        # command; undeclared runs keep the implicit adamw default so the
+        # archived-reproduction command shape is unchanged.
+        override = self.data_dir / 'optimizer.json'
+        override.write_text(json.dumps({'optimizer': 'adamw8bit'}))
+        result = self._launch('--recipe', str(override))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        command = command_from(result.stdout)
+        self.assertEqual(command[command.index('--optimizer') + 1], 'adamw8bit')
+        self.assertIn('Recipe overrides vs configs/v3c.json:', result.stdout)
+        self.assertIn('adamw8bit', result.stdout)  # deviation echoed
+        # Undeclared (grouped and legacy alike): no --optimizer flag at all.
+        self.assertNotIn('--optimizer', command_from(self._launch().stdout))
+        legacy = subprocess.run([sys.executable, str(ROOT / 'scripts' / 'train.py'),
+                                 '--run', 'fixture-recipe-echo', '--legacy', '--dry-run'],
+                                capture_output=True, text=True)
+        self.assertEqual(legacy.returncode, 0, legacy.stderr)
+        self.assertNotIn('--optimizer', command_from(legacy.stdout))
+        # Wrong value / wrong type: parser.error (rc=2), nothing assembled.
+        for bad in ['{"optimizer": "sgd"}', '{"optimizer": 8}', '{"optimizer": true}']:
+            path = self.data_dir / 'bad-optimizer.json'
+            path.write_text(bad)
+            refused = self._launch('--recipe', str(path))
+            self.assertEqual(refused.returncode, 2, bad)
+            self.assertNotIn('Command:', refused.stdout)
+            self.assertIn("'optimizer'", refused.stderr)
 
 
 if __name__ == '__main__':
