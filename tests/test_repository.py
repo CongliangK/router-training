@@ -29,20 +29,37 @@ class RepositoryTests(unittest.TestCase):
         self.assertTrue(config['fullft'] and config['synth'] and config['swa'])
 
     def test_dry_run_does_not_start_gpu_or_create_output(self):
+        # --legacy is explicit (issue #2): the archived v3c recipe keeps its
+        # original row-split calibration; new runs default to grouped mode.
         result = subprocess.run([sys.executable, str(ROOT / 'scripts/train.py'),
-                                 '--run', 'repository-validation-only', '--dry-run'],
+                                 '--run', 'repository-validation-only', '--legacy', '--dry-run'],
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        for flag in ['--fullft', '--synth', '--swa']:
+        for flag in ['--fullft', '--synth', '--swa', '--legacy-calibration']:
             self.assertIn(flag, result.stdout)
         self.assertFalse((ROOT / 'artifacts/repository-validation-only').exists())
 
     def test_launcher_refuses_overwriting_winner(self):
         result = subprocess.run([sys.executable, str(ROOT / 'scripts/train.py'),
-                                 '--run', 'real-history-v3c', '--dry-run'],
+                                 '--run', 'real-history-v3c', '--legacy', '--dry-run'],
                                 capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Output already exists', result.stderr)
+
+    def test_grouped_launch_requires_roles_and_never_falls_back_to_legacy(self):
+        result = subprocess.run([sys.executable, str(ROOT / 'scripts/train.py'),
+                                 '--run', 'repository-validation-only', '--dry-run'],
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('--roles', result.stderr)
+        self.assertIn('--legacy', result.stderr)
+        self.assertFalse((ROOT / 'artifacts/repository-validation-only').exists())
+        result = subprocess.run([sys.executable, str(ROOT / 'scripts/train.py'),
+                                 '--run', 'repository-validation-only', '--legacy',
+                                 '--roles', 'unused.json', '--dry-run'],
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('--legacy reproduces the archived', result.stderr)
 
     def test_supplemental_rows_are_separate_from_generated_splits(self):
         tasks, splits, _ = synthetic_splits()
