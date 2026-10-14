@@ -37,7 +37,7 @@
 | `model_utils.py` | 固定选项决策 logits、8K 上下文、训练/服务一致截断 |
 | `prepare.py`、`extract.py` | 只读历史提取、脱敏及分组切分 |
 | `server.py`、`policy.py`、`routes.json` | 可选独立推理 API（FastAPI） |
-| `scripts/train.py` | 安全启动器：显式 `--legacy`（v3c 归档配方）或预注册分组的分组模式 |
+| `scripts/train.py` | 安全启动器：显式 `--legacy`（v3c 归档配方）或预注册分组的分组模式；两模式都显式传递完整 v3c 配方，分组偏差经 `--recipe` 声明（issue #14） |
 | `scripts/validate_calibration.py` | 纯 CPU 匿名结构校验（绝不读取 test 数据） |
 | `configs/v3c.json` | 完整 run 的精确 CLI 配方 |
 | `tests/` | CPU 单元测试（无需 GPU） |
@@ -101,6 +101,15 @@ GitHub Actions 在 push 和 pull request 时执行这一 CPU 检查；CPU runner
 
 输出摘要只含计数（不含组名、id、标签或 prompt）。**现状**：归档校准池无法满足示例门（约 8 个组、部分类集中在极少数组——见 issue #2），现有数据无法实例化任何分组 run；门槛不为迁就数据放宽，需要补按组隔离的开发数据。训练的完整 dev-no-test 与获批数值协议尚未满足——本仓库不声称已具备训练前置条件。
 
+### 训练可复现性修复（issue #14）
+
+审计确认的四个缺陷已为**未来 run** 修复；归档 v3c 产物是冻结历史，不改动：
+
+- **调度器按实际 optimizer update 计数**：总步数改由类均衡过采样后的行流推导——与训练循环迭代的是**同一份预计算列表**（单一真相源），每 epoch 尾批按 ceil 计入。归档 run 用过采样前长度估算 498 步、实际更新 1158 次。余弦 progress 钳制在 [0,1]（越过预定终点后 LR 不再回升），衰减下限改为**初始 LR 的 10%**（fullft 即 2e-7，对齐官方配方；归档 run 用的是 1e-3 乘数下限，差异见 `--fullft` help 与下文复现要点）。warmup 保持 3%。**因此未来 run 的 LR 曲线与归档 v3c 不同**——包括用当前代码跑 `--legacy` 复现：归档 v3c 是旧调度行为下的历史结果，不能与新 run 直接比较 LR 轨迹（legacy 报告显式携带该声明）。
+- **grouped 启动器显式传递完整配方**：legacy 与 grouped 的命令由同一 builder 从 `configs/v3c.json` 装配；分组 run 不再静默回退 `train_eval.py` 默认值（`synth`/`fullft`/`swa` 全关）。与 v3c 的偏差只能通过显式 `--recipe <json>` 声明（未知键或类型不符一律拒绝），偏差回显到控制台，`--dry-run` 的 Command 列出全部实际传递的配方 flag：`--run v4-dev --roles roles.json --recipe overrides.json --dry-run`。
+- **报告记录真实生效参数**：`report.json` 新增 `effective_config` 块——effective vs requested LR（fullft 无论 `--lr` 传什么都固定初始 LR 2e-6）、每 epoch 过采样后 update 数、尾批处理、调度器形状（总 update、warmup、钳制、下限）、SWA 池最终成员——与原始 CLI 输入分开记录。
+- **SWA 池严格 Top-3**：跌出选择 macro-F1 前三的 epoch 被逐出（释放其 CPU 快照引用）；soup 恒为最终前三的平均，每 epoch 的池打印行如实。
+
 独立推理服务：
 
 ```sh
@@ -145,10 +154,12 @@ seed 20261010、accumulation 8、label smoothing 0.05、beta 0.999、`--fullft -
 
 数据符合 schema 后，全部流水线代码原样可用。
 
-## 复现要点（保留产出该 checkpoint 的算法原样）
+## 复现要点（记录产出该 checkpoint 的算法行为）
 
-1. fullft 实际初始 lr 为 **2e-6**，不是 CLI 默认 `lr=1e-4`；调度为 3% warmup + cosine（乘数下限 1e-3），总步数估算用过采样前数据量，实际更新 1158 次。
-2. SWA 注释写「三个最佳 epoch」，实际池未剔除旧入选 epoch；soup 未胜出，最终选择单独 **epoch 4**。
+以下第 1、2 条描述的是**归档 run 当时的算法行为**；其中调度器与 SWA 语义已按 issue #14 修复（见上节），用当前代码重跑会得到不同的 LR 轨迹——归档数值是旧行为下的历史结果，不可与新 run 直接比较。
+
+1. fullft 实际初始 lr 为 **2e-6**，不是 CLI 默认 `lr=1e-4`（issue #14 后报告在 `effective_config` 中如实区分 effective 与 requested）；归档 run 的调度为 3% warmup + cosine，乘数下限 1e-3、总步数估算用过采样前数据量（估算 498 步，实际更新 1158 次）——**当前代码已修复**为按过采样后 update 计数、progress 钳制 [0,1]、下限初始 LR 的 10%（2e-7）。
+2. 归档 run 的 SWA 池未剔除跌出前三的 epoch（「三个最佳 epoch」注释与实现不符，池可超员）；**当前代码已改为严格 Top-3 逐出**。归档 v3c 的 soup 未胜出，最终选择单独 **epoch 4**（历史结果不变）。
 3. 校准集按随机行分为 selection/fitting 两半，未再按组隔离（组会跨半泄漏，issue #2）；bootstrap 是实现层面重采样，不是真实任务成功证据。该行为仅在显式 `--legacy-calibration` 下原样保留，新 run 默认按组隔离（见上节）。
 4. 无 optimizer resume，中断需重跑；相同参数不保证跨 GPU/依赖版本逐位一致。
 

@@ -7,6 +7,138 @@ import torch.nn.functional as F
 from peft import LoraConfig,get_peft_model
 from model_utils import ROOT,TIERS,TYPES,QUESTIONS,load_engine,read_jsonl,request_for,field_logits,score
 
+# --- Issue #14: training-reproducibility constants (scheduler / SWA audit) ---
+# Official XTuner recipe (configs/training/qwen35.py): fullft lr 2e-6 with
+# cosine decay to 2e-7 and 3% warmup. 2e-7 = 10% of the initial LR, so the
+# cosine multiplier floor is 0.1 — the archived v3c run decayed only to a
+# 1e-3 multiplier; the difference is declared in both READMEs and in
+# effective_config so archived/new LR trajectories are never silently mixed.
+FULLFT_INITIAL_LR=2e-6
+LR_FLOOR_FRACTION=.1
+SWA_POOL_SIZE=3
+
+
+def oversample_epoch_rows(train_rows):
+    # Class-balanced OVERSAMPLING: repeat minority-tier rows to equal per-class
+    # counts, then fully shuffle. The earlier round-robin drained minority
+    # buckets first and left a pure-majority tail whose recency dominated the
+    # final gradient steps of every epoch (the v3/v3b balanced-collapse cause).
+    # Issue #14: this helper is the ONE definition of the per-epoch training
+    # row stream — the training loop iterates its output and the LR scheduler
+    # counts optimizer updates from the same lists, so step accounting can
+    # never drift from actual training again (the archived run planned 498
+    # steps from the raw length while actually taking 1158 updates).
+    buckets=collections.defaultdict(list)
+    for row in train_rows:buckets[row['label']['tier']].append(row)
+    quota=max(len(b) for b in buckets.values())
+    rows=[]
+    for tier,bucket in buckets.items():
+        random.shuffle(bucket)
+        rows.extend(bucket*(quota//len(bucket))+random.sample(bucket,quota%len(bucket)))
+    random.shuffle(rows)
+    return rows
+
+
+def optimizer_updates(row_count,accumulation):
+    # Optimizer updates for one epoch of row_count oversampled rows: the
+    # training loop steps every `accumulation` rows AND on the final possibly
+    # short tail batch — ceil(row_count/accumulation). run() asserts the real
+    # loop counter against this formula after training (issue #14 invariant).
+    return -(-row_count//max(1,accumulation))
+
+
+def cosine_lr_multiplier(step,total_steps,warmup):
+    # Cosine-with-warmup LR multiplier (fullft scheduler only). Issue #14
+    # correctness: progress is CLAMPED to [0,1] so steps past the planned
+    # total can never turn the cosine back up (the old curve rose again after
+    # the end), and the decay floor is 10% of the initial LR.
+    if step<warmup:return step/warmup
+    progress=(step-warmup)/max(1,total_steps-warmup)
+    progress=min(1.,max(0.,progress))
+    return max(LR_FLOOR_FRACTION,(1+math.cos(math.pi*progress))/2)
+
+
+def fullft_scheduler_plan(planned_updates,effective_lr):
+    # Scheduler plan + audit report for the fullft cosine path (issue #14).
+    # The .03 is the warmup TARGET fraction: after int() truncation and the
+    # max(1,..) floor the ACHIEVED fraction differs (e.g. the archived v3c
+    # shape — 6*193 = 1158 updates, warmup int(1158*.03) = 34 — achieves
+    # 34/1158 ≈ 0.0294), so the report records warmup/total_steps, never a
+    # hardcoded .03 that lied about every floored or truncated run
+    # (red-team LOW-2).
+    total_steps=max(1,planned_updates)
+    warmup=max(1,int(total_steps*.03))
+    report={'type':'cosine_with_warmup','total_optimizer_updates':total_steps,'warmup_updates':warmup,'warmup_fraction_of_total':warmup/total_steps,'cosine_progress_clamp':[0.,1.],'lr_floor_fraction_of_initial':LR_FLOOR_FRACTION,'lr_floor':effective_lr*LR_FLOOR_FRACTION,'counting_basis':'optimizer updates over class-balanced oversampled rows; per-epoch tail batch counted by ceil'}
+    return total_steps,warmup,report
+
+
+def effective_initial_lr(args):
+    # The LR the optimizer ACTUALLY starts from: fullft fixes it at 2e-6
+    # (official recipe) regardless of --lr; LoRA paths use --lr directly.
+    # Reports must record this alongside the requested value (issue #14:
+    # args.lr was previously reported as if it were in effect under fullft).
+    return FULLFT_INITIAL_LR if args.fullft else args.lr
+
+
+def top_swa_epochs(history):
+    # The SWA pool's single definition of "best": top-K epochs by selection
+    # macro-F1 (stable sort — an earlier epoch wins a tie, exactly like the
+    # archived sorted() expression).
+    return [h['epoch'] for h in sorted(history,key=lambda h:h['calibration_macro_f1'],reverse=True)[:SWA_POOL_SIZE]]
+
+
+def update_swa_pool(swa_pool,history,snapshot):
+    # Model-soup guardrail, strict Top-K (issue #14): after each epoch,
+    # recompute the current top-3 by selection macro-F1, ADMIT the
+    # just-finished epoch only if it qualifies, and EVICT pooled epochs that
+    # fell out of the top-3 (dropping their CPU fp32 snapshot references —
+    # the old pool over-filled and averaged 4+ epochs while claiming "3 best").
+    # An evicted epoch can never re-enter (its score is fixed, competitors
+    # only grow), so the final pool IS the final top-3 and the soup is their
+    # honest average. snapshot(epoch) is only invoked for a newly admitted
+    # epoch, so no wasted CPU copy is ever made.
+    keep=set(top_swa_epochs(history))
+    pool=[pair for pair in swa_pool if pair[0] in keep]
+    last=history[-1]['epoch']
+    if last in keep and last not in {pair[0] for pair in pool}:
+        pool.append((last,snapshot(last)))
+    pool.sort()
+    return pool
+
+
+def average_state_dicts(snaps):
+    # Model soup: element-wise mean of the pooled fp32 CPU state dicts.
+    avg={}
+    for snap in snaps:
+        for k,v in snap.items():avg[k]=avg.get(k,0)+v/len(snaps)
+    return avg
+
+
+def soup_state_dict(current,avg):
+    # Cast the averaged fp32 soup back onto the live model's dtypes/devices,
+    # keeping non-floating keys from the current state verbatim.
+    return {k:(avg[k].to(current[k].dtype).to(current[k].device) if k in avg else current[k]) for k in current}
+
+
+def effective_config(args,raw_train_rows,epoch_row_counts,scheduler_report,swa_pool):
+    """Issue #14 audit block: what ACTUALLY ran, recorded separately from the
+    raw CLI input. Values here are EFFECTIVE (the loop, optimizer, and
+    scheduler really used them); requested values are echoed under lr_* so
+    effective and requested can never be conflated again."""
+    initial=effective_initial_lr(args)
+    block={'note':'effective vs requested: these values are what the run actually used; raw CLI input is preserved separately',
+           'recipe':{'epochs':args.epochs,'rank':args.rank,'accumulation':args.accumulation,'seed':args.seed,'beta':args.beta,'label_smoothing':args.label_smoothing,'synth':bool(args.synth),'mlp':bool(args.mlp),'fullft':bool(args.fullft),'swa':bool(args.swa)},
+           'lr_effective':initial,'lr_requested':args.lr,
+           'lr_note':('fullft fixes the initial LR at 2e-6 (official recipe); --lr is ignored under --fullft' if args.fullft else '--lr is used directly (LoRA path)'),
+           'train_rows':{'pre_oversampling':raw_train_rows,'oversampled_per_epoch':epoch_row_counts},
+           'epoch_optimizer_updates':[optimizer_updates(n,args.accumulation) for n in epoch_row_counts],
+           'accumulation_tail_batch':'ceil per epoch: a final batch shorter than --accumulation still triggers an optimizer update',
+           'scheduler':scheduler_report,
+           'swa_pool_final_epochs':([pair[0] for pair in swa_pool] if args.swa else None)}
+    if getattr(args,'legacy_calibration',False):
+        block['archived_v3c_divergence_note']=('legacy reproduction shares the issue #14 correctness fixes (oversampled-step scheduler, clamped cosine, 10% LR floor, strict top-3 SWA pool); the archived v3c numbers were produced under the OLD scheduler behavior, so LR trajectories are not comparable')
+    return block
+
 
 def predict_rows(engine,rows):
     output=[]
@@ -315,18 +447,24 @@ def run(args):
         print('full fine-tune: trainable tensors',sum(1 for p in engine.backend.model.parameters() if p.requires_grad),'(uniform fp32 model)',flush=True)
     model=engine.backend.model;model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant':False});model.enable_input_require_grads()
     trainable=sum(p.numel() for p in model.parameters() if p.requires_grad)
+    # Issue #14 single truth source: the oversampled per-epoch row lists are
+    # built ONCE here from the fully assembled train pool (synth join and any
+    # --smoke slice already applied; same helper and same RNG draw sequence as
+    # the old inline per-epoch code). The training loop iterates these lists
+    # and the scheduler counts its updates from them, so the LR plan can never
+    # again be estimated from the raw pre-oversampling length.
+    raw_train_rows=len(datasets['train'])
+    epoch_train_rows=[oversample_epoch_rows(datasets['train']) for _ in range(args.epochs)]
+    epoch_row_counts=[len(rows) for rows in epoch_train_rows]
+    planned_updates=sum(optimizer_updates(n,args.accumulation) for n in epoch_row_counts)
+    effective_lr=effective_initial_lr(args)
     # Official XTuner recipe (configs/training/qwen35.py): lr 2e-6, cosine decay
     # to 2e-7, warmup 3%, wd 0.01. Our fullft path follows it; LoRA paths keep lr 1e-4.
-    optimizer=torch.optim.AdamW((p for p in model.parameters() if p.requires_grad),lr=(2e-6 if args.fullft else args.lr),weight_decay=.01,foreach=False)
-    scheduler=None
+    optimizer=torch.optim.AdamW((p for p in model.parameters() if p.requires_grad),lr=effective_lr,weight_decay=.01,foreach=False)
+    scheduler=None;scheduler_report={'type':'constant (no scheduler)','note':'LoRA paths keep the optimizer LR fixed'}
     if args.fullft:
-        import math as _m
-        total_steps=max(1,args.epochs*(len(datasets['train'])//args.accumulation))
-        warmup=max(1,int(total_steps*.03))
-        def _lr_lambda(step):
-            if step<warmup:return step/warmup
-            progress=(step-warmup)/max(1,total_steps-warmup)
-            return max(1e-3,(1+_m.cos(_m.pi*progress))/2)
+        total_steps,warmup,scheduler_report=fullft_scheduler_plan(planned_updates,effective_lr)
+        def _lr_lambda(step):return cosine_lr_multiplier(step,total_steps,warmup)
         scheduler=torch.optim.lr_scheduler.LambdaLR(optimizer,_lr_lambda)
     # Effective-number class weights (Cui et al. 2019, beta=0.999) replace the
     # earlier sqrt inverse-frequency: the soft sqrt version under-corrected the
@@ -344,18 +482,9 @@ def run(args):
     print('tier weights',weights,'vision weights',vision_weights,flush=True)
     history=[];best_score=-1;start=time.perf_counter();updates=0;swa_pool=[]
     for epoch in range(args.epochs):
-        # Class-balanced OVERSAMPLING: repeat minority-tier rows to equal per-class
-        # counts, then fully shuffle. The earlier round-robin drained minority
-        # buckets first and left a pure-majority tail whose recency dominated the
-        # final gradient steps of every epoch (the v3/v3b balanced-collapse cause).
-        buckets=collections.defaultdict(list)
-        for row in datasets['train']:buckets[row['label']['tier']].append(row)
-        quota=max(len(b) for b in buckets.values())
-        rows=[]
-        for tier,bucket in buckets.items():
-            random.shuffle(bucket)
-            rows.extend(bucket*(quota//len(bucket))+random.sample(bucket,quota%len(bucket)))
-        random.shuffle(rows)
+        # Oversampled per-epoch rows come from the single precomputed source
+        # above (oversample_epoch_rows); the loop consumes, never rebuilds.
+        rows=epoch_train_rows[epoch]
         model.train();optimizer.zero_grad();running=0
         for i,row in enumerate(rows):
             request,truncated=request_for(engine,row['prompt'])
@@ -394,22 +523,21 @@ def run(args):
             (output/'best-epoch.json').write_text(json.dumps(history[-1],indent=2)+'\n')
         print('epoch completed',history[-1],flush=True)
         if args.swa:
-            # Model-soup guardrail: keep CPU fp32 copies of the 3 best epochs.
-            top_ids={h['epoch'] for h in sorted(history,key=lambda h:h['calibration_macro_f1'],reverse=True)[:3]}
-            if history[-1]['epoch'] in top_ids:
-                snap={k:v.detach().to('cpu',torch.float32).clone() for k,v in engine.backend.model.state_dict().items() if v.is_floating_point()}
-                swa_pool=[pair for pair in swa_pool if pair[0]!=history[-1]['epoch']]
-                swa_pool.append((history[-1]['epoch'],snap));swa_pool.sort()
-                print('swa pool epochs:',[pair[0] for pair in swa_pool],flush=True)
+            # Model-soup guardrail: strict top-3 pool with eviction (issue #14).
+            def _snapshot(epoch_id):
+                return {k:v.detach().to('cpu',torch.float32).clone() for k,v in engine.backend.model.state_dict().items() if v.is_floating_point()}
+            swa_pool=update_swa_pool(swa_pool,history,_snapshot)
+            print('swa pool epochs:',[pair[0] for pair in swa_pool],flush=True)
+    # Issue #14 invariant: the scheduler was built from planned_updates; if the
+    # loop's real stepping ever diverges from the counting formula, fail loudly
+    # instead of silently mis-scheduling every future run.
+    if updates!=planned_updates:raise AssertionError(f'optimizer update drift: planned {planned_updates}, executed {updates}')
     # Model soup: average the pooled epoch states, then keep whichever wins on
     # the selection half (soup vs single best epoch). Same split, honest comparison.
     if args.swa and len(swa_pool)>=2:
         print('building soup from epochs',[pair[0] for pair in swa_pool],flush=True)
-        avg={}
-        for _,snap in swa_pool:
-            for k,v in snap.items():avg[k]=avg.get(k,0)+v/len(swa_pool)
-        current=engine.backend.model.state_dict()
-        soup_state={k:(avg[k].to(current[k].dtype).to(current[k].device) if k in avg else current[k]) for k in current}
+        avg=average_state_dicts([snap for _,snap in swa_pool])
+        soup_state=soup_state_dict(engine.backend.model.state_dict(),avg)
         engine.backend.model.load_state_dict(soup_state);engine.backend.model.eval()
         soup_metrics=metrics(predict_rows(engine,selection_rows))
         soup_f1=soup_metrics['tier_per_class']['macro_f1']
@@ -438,6 +566,10 @@ def run(args):
         state=_M.from_pretrained(output/'full-checkpoint',dtype=torch.bfloat16,local_files_only=True).state_dict()
         engine.backend.model.load_state_dict(state)
     model.eval()
+    # Issue #14 audit snapshot, shared by both report paths: what actually ran
+    # (effective LR, oversampled per-epoch update counts, scheduler shape,
+    # final SWA pool members) — recorded separately from raw CLI input.
+    effective=effective_config(args,raw_train_rows,epoch_row_counts,scheduler_report,swa_pool)
     if not legacy:
         # Grouped calibration tail (issue #2): score ONLY role-B rows with the
         # A-selected checkpoint, select tau/T out-of-fold over B's whole-group
@@ -468,7 +600,7 @@ def run(args):
                  'Training prerequisites under the pending evaluation protocol (approved development data/protocol) are NOT yet satisfied; this run is not training-ready or production-ready.']
         if calibration['status']!='selected':
             reasons.append('No feasible tau under the registered protocol: temperatures were not calibrated and NO calibration.json was written; the server refuses to load this run rather than serve unadjusted logits.')
-        report={'run':args.run,'seed':args.seed,'mode':'grouped-dev','base_model':json.loads((ROOT/'model-manifest.json').read_text()),'training':{'epochs':args.epochs,'rank':args.rank,'lr':args.lr,'accumulation':args.accumulation,'trainable_parameters':trainable,'optimizer_updates':updates,'seconds':time.perf_counter()-start,'history':history},'evaluation_basis':'group-isolated development calibration (A: checkpoint selection, B: out-of-fold temperature/tau); NOT an independent evaluation','calibration':calibration,'tier_class_weights':weights,'vision_class_weights':vision_weights,'quality_gate':{'passed':False,'mode':'shadow','reasons':reasons},'split_report':json.loads((ROOT/'data/split-report.json').read_text())}
+        report={'run':args.run,'seed':args.seed,'mode':'grouped-dev','base_model':json.loads((ROOT/'model-manifest.json').read_text()),'training':{'epochs':args.epochs,'rank':args.rank,'lr':effective_lr,'accumulation':args.accumulation,'trainable_parameters':trainable,'optimizer_updates':updates,'seconds':time.perf_counter()-start,'history':history},'effective_config':effective,'evaluation_basis':'group-isolated development calibration (A: checkpoint selection, B: out-of-fold temperature/tau); NOT an independent evaluation','calibration':calibration,'tier_class_weights':weights,'vision_class_weights':vision_weights,'quality_gate':{'passed':False,'mode':'shadow','reasons':reasons},'split_report':json.loads((ROOT/'data/split-report.json').read_text())}
         (output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
         (output/'quality-gate.json').write_text(json.dumps(report['quality_gate'],ensure_ascii=False,indent=2)+'\n')
         print('DONE',output/'report.json',json.dumps({'mode':'grouped-dev','calibration_status':calibration['status'],'quality_gate':report['quality_gate']},ensure_ascii=False),flush=True)
@@ -516,14 +648,14 @@ def run(args):
     if tuned_metrics['vision_positive_examples']<20:gate_reasons.append('Fewer than 20 independent vision-positive test examples.')
     if (tuned_metrics['flagship_underroute_rate'] or 0)>.05:gate_reasons.append('Flagship under-routing exceeds 5%.')
     if (tuned_metrics['vision_false_negative_rate'] or 0)>.05:gate_reasons.append('Vision false-negative rate exceeds 5%.')
-    report={'run':args.run,'seed':args.seed,'base_model':json.loads((ROOT/'model-manifest.json').read_text()),'training':{'epochs':args.epochs,'rank':args.rank,'lr':args.lr,'accumulation':args.accumulation,'trainable_parameters':trainable,'optimizer_updates':updates,'seconds':time.perf_counter()-start,'history':history},'evaluation_basis':'agreement with fresh expert prompt-only labels; NOT real generation task success','baseline':baseline_metrics,'finetuned':tuned_metrics,'baseline_temperatures':baseline_temps,'baseline_calibration_notes':baseline_temp_notes,'temperatures':temps,'calibration_notes':temp_notes,'logit_adjustment':{'sweep':sweep,'chosen':chosen},'tier_class_weights':weights,'vision_class_weights':vision_weights,'quality_gate':{'passed':False,'mode':'shadow','reasons':gate_reasons},'split_report':json.loads((ROOT/'data/split-report.json').read_text())}
+    report={'run':args.run,'seed':args.seed,'base_model':json.loads((ROOT/'model-manifest.json').read_text()),'training':{'epochs':args.epochs,'rank':args.rank,'lr':effective_lr,'accumulation':args.accumulation,'trainable_parameters':trainable,'optimizer_updates':updates,'seconds':time.perf_counter()-start,'history':history},'effective_config':effective,'evaluation_basis':'agreement with fresh expert prompt-only labels; NOT real generation task success','baseline':baseline_metrics,'finetuned':tuned_metrics,'baseline_temperatures':baseline_temps,'baseline_calibration_notes':baseline_temp_notes,'temperatures':temps,'calibration_notes':temp_notes,'logit_adjustment':{'sweep':sweep,'chosen':chosen},'tier_class_weights':weights,'vision_class_weights':vision_weights,'quality_gate':{'passed':False,'mode':'shadow','reasons':gate_reasons},'split_report':json.loads((ROOT/'data/split-report.json').read_text())}
     (output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
     (output/'calibration.json').write_text(json.dumps({'temperatures':temps,'tier_adjust':tier_adjust,'tier_adjust_tau':chosen['tau'],'tier_prior':tier_prior,'notes':temp_notes},ensure_ascii=False,indent=2)+'\n')
     (output/'quality-gate.json').write_text(json.dumps(report['quality_gate'],ensure_ascii=False,indent=2)+'\n')
     print('DONE',output/'report.json',json.dumps({'baseline_accuracy':baseline_metrics['tier']['accuracy'],'finetuned_accuracy':tuned_metrics['tier']['accuracy'],'quality_gate':report['quality_gate']},ensure_ascii=False),flush=True)
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('--run',default='real-history-v1');p.add_argument('--epochs',type=int,default=6);p.add_argument('--rank',type=int,default=8);p.add_argument('--lr',type=float,default=1e-4);p.add_argument('--accumulation',type=int,default=8);p.add_argument('--seed',type=int,default=20261010);p.add_argument('--synth',action='store_true',help='merge data/synth/*.jsonl into train/calibration');p.add_argument('--beta',type=float,default=.999);p.add_argument('--mlp',action='store_true',help='extend LoRA to MLP and all attention output/input projections (deeper modification)');p.add_argument('--fullft',action='store_true',help='full fine-tune of the language backbone (deepest modification; vision tower stays frozen via LoRA-free path)');p.add_argument('--label-smoothing',type=float,default=.05);p.add_argument('--swa',action='store_true',help='average the 3 best epochs by selection macro-F1 (model soup guardrail)');p.add_argument('--smoke',action='store_true',help='short pipeline validation run: legacy = 24 train rows, 6+6 calibration rows, 1 epoch; grouped = 24 train rows + whole-group calibration sub-pool, 1 epoch (support gates never relaxed)')
+    p=argparse.ArgumentParser();p.add_argument('--run',default='real-history-v1');p.add_argument('--epochs',type=int,default=6);p.add_argument('--rank',type=int,default=8);p.add_argument('--lr',type=float,default=1e-4,help='LoRA initial learning rate; IGNORED under --fullft, which fixes the initial LR at 2e-6 (official recipe — effective_config records effective vs requested)');p.add_argument('--accumulation',type=int,default=8);p.add_argument('--seed',type=int,default=20261010);p.add_argument('--synth',action='store_true',help='merge data/synth/*.jsonl into train/calibration');p.add_argument('--beta',type=float,default=.999);p.add_argument('--mlp',action='store_true',help='extend LoRA to MLP and all attention output/input projections (deeper modification)');p.add_argument('--fullft',action='store_true',help='full fine-tune of the language backbone (deepest modification; vision tower stays frozen via LoRA-free path). LR schedule (issue #14): 3%% warmup + cosine over the OVERSAMPLED optimizer-update count (tail batch ceil), progress clamped to [0,1], decay floor at 10%% of the initial LR (2e-7; the archived v3c used a 1e-3 multiplier floor)');p.add_argument('--label-smoothing',type=float,default=.05);p.add_argument('--swa',action='store_true',help='average the 3 best epochs by selection macro-F1 (model soup guardrail; strict top-3 pool with eviction — issue #14)');p.add_argument('--smoke',action='store_true',help='short pipeline validation run: legacy = 24 train rows, 6+6 calibration rows, 1 epoch; grouped = 24 train rows + whole-group calibration sub-pool, 1 epoch (support gates never relaxed)')
     p.add_argument('--legacy-calibration',action='store_true',help='reproduce the archived v3c row-split calibration exactly (issue #2: explicit legacy; new runs default to group-isolated calibration)')
     p.add_argument('--calibration-roles',default=None,help='JSON file with pre-registered A/B/C role groups (+ optional support_policy/protocol); required for new runs')
     p.add_argument('--structural-dry-run',action='store_true',help='grouped runs: run the CPU structural preflight (no model, no artifacts, no test access) and exit')

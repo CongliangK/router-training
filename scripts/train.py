@@ -10,16 +10,31 @@ Two explicit modes (issue #2; no silent fallback between them):
   --data-dir configures that preflight only; an actual launch always reads
   the repository data/ directory (train_eval.py takes no data-dir), so a
   non-default --data-dir is refused at launch and allowed only with --dry-run.
+
+Issue #14: BOTH modes now pass the complete v3c training recipe explicitly
+through one shared builder reading configs/v3c.json. The grouped entry point
+previously forwarded only --run/--calibration-roles and silently trained on
+train_eval.py defaults (synth/fullft/swa off); a grouped run now declares
+deviations from v3c ONLY through an explicit --recipe JSON override (unknown
+or wrongly-typed keys are refused), the deviations are echoed to the console,
+and the --dry-run Command lists every recipe flag actually passed.
 """
 from pathlib import Path
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_DIR = ROOT / 'data'
+RECIPE_PATH = ROOT / 'configs/v3c.json'
+# configs/v3c.json keys that map to train_eval.py CLI flags. Everything else
+# in the file (description, run name, manifests, prompt budgets) is archive
+# metadata, not overridable training input.
+RECIPE_SCALAR_KEYS = ['epochs', 'rank', 'lr', 'accumulation', 'seed', 'beta', 'label_smoothing']
+RECIPE_FLAG_KEYS = ['synth', 'mlp', 'fullft', 'swa']
 
 
 def data_dir_guard(args, parser):
@@ -35,6 +50,65 @@ def data_dir_guard(args, parser):
                      'Use the default for real launches, or combine a custom --data-dir with --dry-run')
 
 
+def recipe_flags(recipe):
+    """The COMPLETE training recipe as explicit train_eval.py flags. ONE
+    builder assembles both launcher modes' commands (issue #14), so neither
+    the legacy nor the grouped entry point can silently fall back to
+    train_eval.py defaults again."""
+    flags = []
+    for key in RECIPE_SCALAR_KEYS:
+        flags.extend(['--' + key.replace('_', '-'), str(recipe[key])])
+    for key in RECIPE_FLAG_KEYS:
+        if recipe[key]:
+            flags.append('--' + key)
+    return flags
+
+
+def merged_recipe(recipe, overrides_path, parser):
+    """v3c defaults + explicitly declared deviations (issue #14). The override
+    file may carry only known recipe keys, each matching the v3c value's type
+    (bools are never confused with ints) and finite (JSON's NaN/Infinity
+    literals are refused); anything else is refused rather than guessed.
+    Returns the merged recipe and the declared deviations."""
+    if overrides_path is None:
+        return recipe, {}
+    try:
+        overrides = json.loads(Path(overrides_path).read_text())
+    except (OSError, ValueError) as error:
+        parser.error(f'--recipe must be a readable JSON object: {error}')
+    if not isinstance(overrides, dict) or not overrides:
+        parser.error('--recipe must be a non-empty JSON object of recipe overrides')
+    allowed = set(RECIPE_SCALAR_KEYS) | set(RECIPE_FLAG_KEYS)
+    unknown = sorted(set(overrides) - allowed)
+    if unknown:
+        parser.error(f'--recipe has unknown keys {unknown}; overridable keys: {sorted(allowed)}')
+    merged = dict(recipe)
+    deviations = {}
+    for key, value in overrides.items():
+        expected = recipe[key]
+        if isinstance(expected, bool):
+            valid = isinstance(value, bool)
+        elif isinstance(expected, int):
+            valid = isinstance(value, int) and not isinstance(value, bool)
+        else:  # float keys (lr, beta, label_smoothing): plain ints are fine
+            valid = isinstance(value, (int, float)) and not isinstance(value, bool)
+        if not valid:
+            parser.error(f'--recipe key {key!r} must match the v3c value type '
+                         f'({expected!r}: {type(expected).__name__})')
+        # Red-team LOW-1: json.loads happily parses the JSON NaN/Infinity
+        # literals into float nan/inf, which would silently poison optimizer
+        # hyperparameters (lr=inf) and later report JSON. Ints cannot be
+        # non-finite, so only float values need the check. The value itself is
+        # deliberately NOT echoed — only the key and the reason — so a crafted
+        # override file cannot inject arbitrary text into the error path.
+        if isinstance(value, float) and not math.isfinite(value):
+            parser.error(f'--recipe key {key!r} must be a finite number; '
+                         'NaN and Infinity are not valid recipe values')
+        merged[key] = value
+        deviations[key] = {'v3c': expected, 'declared': value}
+    return merged, deviations
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run', required=True, help='New output name; existing runs are refused')
@@ -47,6 +121,10 @@ def main():
                         help='Reproduce the archived v3c recipe with the original row-split calibration (explicit legacy; issue #2)')
     parser.add_argument('--roles', default=None,
                         help='Roles config JSON with pre-registered A/B/C groups; required for grouped (non-legacy) runs')
+    parser.add_argument('--recipe', default=None,
+                        help='Grouped runs only: JSON file of recipe overrides over the v3c defaults from '
+                             'configs/v3c.json (e.g. {"lr": 1e-4}); deviations are echoed and appear in the '
+                             'printed Command. Refused with --legacy, which reproduces v3c unchanged')
     parser.add_argument('--data-dir', default=str(DEFAULT_DATA_DIR),
                         help='Data directory for the grouped structural preflight ONLY (train.jsonl + '
                              'calibration.jsonl; test.jsonl is never read). The actual run always reads the '
@@ -62,13 +140,11 @@ def main():
     if args.legacy:
         if args.roles:
             parser.error('--roles configures grouped runs; --legacy reproduces the archived v3c recipe unchanged')
-        recipe = json.loads((ROOT / 'configs/v3c.json').read_text())
+        if args.recipe:
+            parser.error('--recipe declares grouped-run deviations; --legacy reproduces the archived v3c recipe unchanged')
+        recipe = json.loads(RECIPE_PATH.read_text())
         command = [sys.executable, str(ROOT / 'train_eval.py'), '--run', args.run, '--legacy-calibration']
-        for key in ['epochs', 'rank', 'lr', 'accumulation', 'seed', 'beta', 'label_smoothing']:
-            command.extend(['--' + key.replace('_', '-'), str(recipe[key])])
-        for key in ['synth', 'mlp', 'fullft', 'swa']:
-            if recipe[key]:
-                command.append('--' + key)
+        command.extend(recipe_flags(recipe))
         if args.smoke:
             command.append('--smoke')
         print('Command:', command, flush=True)
@@ -85,6 +161,10 @@ def main():
     roles_path = Path(args.roles)
     if not roles_path.is_file():
         parser.error(f'Roles config not found: {roles_path}')
+    # Issue #14: the grouped command carries the COMPLETE recipe — v3c defaults
+    # plus any explicitly declared --recipe deviations — so a grouped run can
+    # never silently train on train_eval.py defaults again.
+    recipe, deviations = merged_recipe(json.loads(RECIPE_PATH.read_text()), args.recipe, parser)
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from validate_calibration import run_validation
     ok, text = run_validation(args.data_dir, roles_path)
@@ -92,8 +172,11 @@ def main():
     print(text, flush=True)
     command = [sys.executable, str(ROOT / 'train_eval.py'), '--run', args.run,
                '--calibration-roles', str(roles_path)]
+    command.extend(recipe_flags(recipe))
     if args.smoke:
         command.append('--smoke')
+    if deviations:
+        print('Recipe overrides vs configs/v3c.json:', json.dumps(deviations, sort_keys=True), flush=True)
     print('Command:', command, flush=True)
     if args.dry_run:
         return 0 if ok else 1
