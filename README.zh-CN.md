@@ -83,6 +83,25 @@ GitHub Actions 在 push 和 pull request 时执行这一 CPU 检查；CPU runner
 curl http://127.0.0.1:19949/health
 ```
 
+### 服务契约（schema version 2）
+
+默认 `--mode diagnostic` 始终**仅供诊断**，即使模型已合格也不授予执行许可。
+`/health` 与 `/route` 均包含 `mode`（`diagnostic` / `execution`）、
+`quality_gate_passed`、`quality_gate_mode`（`shadow` / `qualified`）、
+`quality_gate_status`、`execution_allowed` 与 `advisory_only`。非空
+`recommendation` 内也包含后两个许可字段。建议存在不等于允许执行；调用方必须
+检查路由响应及建议的 `execution_allowed: true`，不能仅凭模型名称采取行动。
+
+只有显式 `--mode execution`、对应 run 的 gate 为布尔值 `passed: true` 且
+`mode: qualified`、并存在授权路由时，建议才允许作为执行依据。未通过、缺失、
+不可读、畸形或自相矛盾的 gate 在模型评分前返回 HTTP 503，`detail` 内带拒绝
+执行的契约；无可用建议也返回 503。诊断模式在这些 gate 状态下仍可给出明确标记
+`advisory_only: true` 的建议。健康响应的许可表示服务就绪，不保证每个请求都有
+兼容路由。schema 2 不再用响应 `mode=shadow/qualified` 表示质量门，而是将服务
+模式和 gate 状态分开；旧客户端必须更新，不能沿用旧字段推断执行权限。
+v3c 归档模型是 **shadow，不是生产合格模型**；历史服务切换或 `ready: true`
+均不等于质量门通过。本契约不修改模型、质量门归档或实际部署。
+
 ### 基座与权重
 
 基座 `internlm/Intern-Decision-0.8B`，固定 revision，加载不启用 remote model code。`.safetensors` 等大权重被 Git 忽略、**不在本仓库分发**：请从上游 Hugging Face（Apache-2.0）下载固定 revision，或复制本地权重后训练。基座推理代码、tokenizer、配置及上游许可证保留在 Git 中。

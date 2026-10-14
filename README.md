@@ -105,6 +105,29 @@ Standalone inference server:
 curl http://127.0.0.1:19949/health
 ```
 
+### Service contract (schema version 2)
+
+The default `--mode diagnostic` is **advisory only**, even for a qualified model.
+Both `/health` and `/route` report `mode` (`diagnostic` or `execution`),
+`quality_gate_passed`, `quality_gate_mode` (`shadow` or `qualified`),
+`quality_gate_status`, `execution_allowed`, and `advisory_only`. A non-null
+`recommendation` repeats the last two permission flags. Its presence alone is
+never permission to execute; callers must require `execution_allowed: true` on
+the route response and recommendation.
+
+`--mode execution` permits a recommendation only when that run's gate has the
+literal boolean `passed: true` and `mode: qualified`, and an authorized route
+exists. An unpassed, missing, unreadable, malformed, or contradictory gate
+returns HTTP 503 with a fail-closed contract in `detail`, before model scoring.
+No authorized recommendation also returns 503. Diagnostic mode may still show
+an advisory recommendation with such a gate. The health permission describes
+service readiness, not a guarantee that every request has a compatible route.
+Schema 2 replaces the old response `mode=shadow/qualified` with explicit service
+mode; gate status remains separate. Clients must update rather than infer
+permission from the old field. The archived v3c is **shadow, not production
+qualified**; a historical service switch or `ready: true` does not pass its gate.
+No model, gate artifact, or deployment is changed by this contract.
+
 ### Base model & weights
 
 The base is `internlm/Intern-Decision-0.8B` pinned to revision
