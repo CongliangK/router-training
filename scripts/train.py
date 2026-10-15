@@ -171,6 +171,13 @@ def main():
     parser.add_argument('--label-schema',choices=VERSIONS,default=LEGACY,help='Opt-in six-task v2; unversioned products stay seven-task v1')
     parser.add_argument('--supplemental',type=Path,action='append',help='Explicit v2 synthetic supplemental JSONL (train only)')
     args = parser.parse_args()
+    # Resolve identity ONCE in the original caller cwd, before validation or
+    # forwarding. The child runs under ROOT, so relative strings would otherwise
+    # select different files. Absent options still emit no new legacy flags.
+    args.data_dir=Path(args.data_dir).resolve()
+    if args.roles is not None:args.roles=Path(args.roles).resolve()
+    if args.recipe is not None:args.recipe=Path(args.recipe).resolve()
+    if args.supplemental:args.supplemental=[path.resolve() for path in args.supplemental]
     if args.legacy and args.label_schema!=LEGACY:parser.error('--legacy requires router-label-v1')
     if args.supplemental and args.label_schema!=V2:parser.error('--supplemental requires router-label-v2')
     if not args.run.replace('-', '').replace('_', '').isalnum():

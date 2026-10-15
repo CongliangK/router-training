@@ -33,14 +33,24 @@ reviews, 16 creative blinded reviews, real version provenance/group support and
 no-leak acceptance are unavailable. No training, smoke or model loading is implied.
 
 
-Integration with pending #8 keeps its intake API separate from task semantics:
+Integration with merged #8 keeps its intake API separate from task semantics:
 `label_schema_version` remains source integer 1; `task_label_schema_version`
 identifies router-label-v1/v2. V1 frozen/unified and expert-only split-v2 remain
 available. V2 supports expert-only new outputs with the frozen-v1 split algorithm;
 v2 + unified/measured/prepare-preflight/split-v2 fails closed before writes.
 See the [exact supported matrix](docs/LABEL-SCHEMA.md#composed-interface-matrix-8--18--24).
-The exact #8 candidate is a pending strong dependency, NOT approved/main; publication
-waits for independent upstream round-2 approval+merge and fresh full integrated review.
+Upstream #8 is approved/merged (main `32ad23a`, supplied integration status);
+this #18 fix still needs a fresh independent full red-team of its final SHA.
+
+V2 dataset preflight/runtime require matching complete question hash, ordered classes
+and semantic version in both prepared schema documents before sampling/output/model
+work. Relative launch inputs (dataset, supplements, roles, recipe) resolve once in the
+caller's directory. Prediction adapters validate input semantics before scoring and
+retain train-only/source provenance; supplements cannot become evaluation support.
+Grouped calibration fits fresh role-B logits joined against locked IDs/groups/labels
+(the repaired stale-planning-score defect was inherited from #2). The frozen-v1
+report reader rejects v2 aggregates and rows, including unscored inputs; v2 runs
+record an unavailable diagnostic instead. Use the explicit versioned metrics API.
 
 ## Why this exists
 

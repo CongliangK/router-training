@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from task_label_schema import LEGACY, VERSIONS, validate_supervised_rows, training_supplemental
+from task_label_schema import LEGACY, VERSIONS, validate_supervised_rows, validate_dataset_schema, training_supplemental
 from calibration_groups import PlanError, compute_prior, preflight_roles, anonymous_summary
 
 
@@ -39,10 +39,11 @@ def run_validation(data_dir, roles_path, schema_version=LEGACY, supplemental_pat
     calibration.jsonl; test.jsonl is intentionally never read."""
     data_dir = Path(data_dir)
     roles_path = Path(roles_path)
-    train_rows = _read_jsonl(data_dir / 'train.jsonl')
-    calibration_rows = _read_jsonl(data_dir / 'calibration.jsonl')
-    roles_config = json.loads(roles_path.read_text())
     try:
+        validate_dataset_schema(data_dir,schema_version)
+        train_rows = _read_jsonl(data_dir / 'train.jsonl')
+        calibration_rows = _read_jsonl(data_dir / 'calibration.jsonl')
+        roles_config = json.loads(roles_path.read_text())
         validate_supervised_rows(train_rows,schema_version)
         additions=training_supplemental(supplemental_paths,train_rows+calibration_rows,schema_version)
         plan = preflight_roles(calibration_rows, roles_config,schema_version=schema_version)
@@ -58,7 +59,7 @@ def run_validation(data_dir, roles_path, schema_version=LEGACY, supplemental_pat
         summary['supplemental_rows']=len(additions)
         return True, json.dumps({'ok': True, 'plan': summary}, ensure_ascii=False, indent=2)
     except OSError:
-        return False,json.dumps({'ok':False,'error':'supplemental input cannot be read (path withheld)'})
+        return False,json.dumps({'ok':False,'error':'preflight input cannot be read (path withheld)'})
     except ValueError as error:
         return False, json.dumps({'ok': False, 'error': str(error)}, ensure_ascii=False)
 

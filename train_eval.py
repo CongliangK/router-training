@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from peft import LoraConfig,get_peft_model
 from evaluation_metrics import target, per_class, bootstrap_ci, validate_answer, calibration_bins, routing_costs, metrics
 from split_reporting import split_report
-from task_label_schema import LEGACY, V2, VERSIONS, version, questions_for, metadata, validate_supervised_rows, validate_prediction_rows, training_supplemental
+from task_label_schema import LEGACY, V2, VERSIONS, version, questions_for, metadata, validate_supervised_rows, validate_prediction_rows, validate_score, validate_dataset_schema, training_supplemental
 from model_utils import ROOT,TIERS,TYPES,QUESTIONS,load_engine,read_jsonl,request_for,field_logits,score
 
 # --- Issue #14: training-reproducibility constants (scheduler / SWA audit) ---
@@ -189,14 +189,21 @@ def effective_config(args,raw_train_rows,epoch_row_counts,scheduler_report,swa_p
 
 
 def predict_rows(engine,rows,schema_version=LEGACY):
+    rows=list(rows);selected=version(schema_version)
+    # Validate the WHOLE input before scoring, not the score's replacement
+    # declaration. Train-only examples may be scored, never laundered as support.
+    validate_supervised_rows(rows,selected,allow_supplemental=True)
     output=[]
     for i,row in enumerate(rows):
-        start=time.perf_counter(); prediction=score(engine,row['prompt'],schema_version=schema_version)
-        output.append({'id':row['id'],'label':row['label'],**prediction,'latency_ms':(time.perf_counter()-start)*1000})
-        # Keep the real grouping identity for cluster evaluation; never infer
-        # independent rows when source grouping was not supplied.
-        for key in ['split_group','group']:
-            if key in row:output[-1][key]=row[key]
+        start=time.perf_counter(); prediction=score(engine,row['prompt'],schema_version=selected)
+        validate_score(prediction,selected)
+        # Preserve arbitrary source/provenance/train-only metadata, but do not
+        # duplicate the prompt. Only score fields can change; identities cannot.
+        result={key:value for key,value in row.items() if key not in ('prompt','logits','answers')}
+        for key in ('answers','input_tokens','context_truncated'):
+            if key in prediction:result[key]=prediction[key]
+        result['latency_ms']=(time.perf_counter()-start)*1000
+        output.append(result)
         if (i+1)%25==0:print('scored',i+1,'/',len(rows),flush=True)
     return output
 
@@ -308,17 +315,21 @@ def build_grouped_plan(calibration_rows,roles_config,schema_version=LEGACY):
 
 def run_grouped_calibration(plan,scored_rows,prior,protocol,checkpoint_ref):
     # Issue #2 adapter between the torch training loop and the stdlib OOF
-    # calibration: re-attaches split_group by id and forwards ONLY role-B
+    # calibration: preserves supplied split_group and forwards ONLY role-B
     # rows. Roles A/C and any test rows must never reach temperature/tau
     # fitting; calibration_groups.select_tau_oof additionally rejects any
     # row set that is not exactly role B, so a wiring mistake fails loudly.
-    from calibration_groups import select_tau_oof
+    from calibration_groups import PlanError,select_tau_oof
+    if not isinstance(scored_rows,list) or any(not isinstance(row,dict) or
+            not isinstance(row.get('id'),str) or not row['id'] for row in scored_rows):
+        raise PlanError('scored rows require non-empty string ids (values withheld)')
     by_id={row['id']:row for row in plan['rows_by_role']['B']}
     selected=plan['schema'].get('task_label_schema_version',LEGACY)
     active=[row for row in scored_rows if row['id'] in by_id]
     validate_prediction_rows(active,selected)  # never stamp old seven-option predictions as v2
-    logits_rows=[{'id':row['id'],'split_group':by_id[row['id']]['split_group'],'label':row['label'],
-                   'task_label_schema_version':row.get('task_label_schema_version',LEGACY),
+    # Never infer or replace supplied identity/provenance. The selector checks
+    # missing/conflicting groups, labels and versions against the locked B plan.
+    logits_rows=[{**row,
                   'logits':{field:answer['logits'] for field,answer in row['answers'].items()}}
                  for row in active]
     return select_tau_oof(plan=plan,rows=logits_rows,prior=prior,protocol=protocol,checkpoint_ref=checkpoint_ref)
@@ -376,6 +387,8 @@ def run(args):
     if legacy and roles_path:raise SystemExit('--legacy-calibration and --calibration-roles are mutually exclusive')
     if not legacy and not roles_path:raise SystemExit('New runs default to group-isolated calibration (issue #2): pass --calibration-roles with pre-registered A/B/C groups, or pass --legacy-calibration to reproduce the archived v3c recipe')
     if getattr(args,'structural_dry_run',False) and legacy:raise SystemExit('--structural-dry-run applies to grouped runs only')
+    data_dir=Path(getattr(args,'data_dir',None) or ROOT/'data')
+    validate_dataset_schema(data_dir,selected)  # BEFORE optimizer/output/sampler/model
     # Issue #14b: refuse an un-runnable recipe before touching the model or
     # creating the append-only artifacts/<run>/ directory.
     ensure_optimizer_available(getattr(args,'optimizer','adamw'))
@@ -388,7 +401,6 @@ def run(args):
     # Grouped dev runs never open the test split (dev-no-test). The legacy
     # path still reads test for its historical report; the complete
     # dev-no-test rework for training is NOT satisfied by this change.
-    data_dir=Path(getattr(args,'data_dir',None) or ROOT/'data')
     datasets={name:read_jsonl(data_dir/f'{name}.jsonl') for name in (['train','calibration','test'] if legacy else ['train','calibration'])}
     for rows in datasets.values():validate_supervised_rows(rows,selected)
     additions=training_supplemental(supplement,[r for rows in datasets.values() for r in rows],selected)
@@ -659,7 +671,9 @@ def run(args):
             reasons.append('No feasible tau under the registered protocol: temperatures were not calibrated and NO calibration.json was written; the server refuses to load this run rather than serve unadjusted logits.')
         report={'run':args.run,'seed':args.seed,'mode':'grouped-dev','base_model':json.loads((ROOT/'model-manifest.json').read_text()),'training':{'epochs':args.epochs,'rank':args.rank,'lr':effective_lr,'accumulation':args.accumulation,'trainable_parameters':trainable,'optimizer_updates':updates,'seconds':time.perf_counter()-start,'history':history},'effective_config':effective,'evaluation_basis':'group-isolated development calibration (A: checkpoint selection, B: out-of-fold temperature/tau); NOT an independent evaluation','calibration':calibration,'tier_class_weights':weights,'vision_class_weights':vision_weights,'quality_gate':{'passed':False,'mode':'shadow','reasons':reasons},'split_report':json.loads((data_dir/'split-report.json').read_text())}
         report['quality_gate']=apply_ece_veto(report['quality_gate'],None,max_tier_ece)
-        report['frozen_test_diagnostics']=split_report(report['split_report'])
+        report['frozen_test_diagnostics']=(split_report(report['split_report']) if selected==LEGACY else
+            {'status':'unavailable','task_label_schema_version':selected,
+             'reason':'No v2 split-report diagnostic reader is supported; use the explicit versioned metrics API. No test was read.'})
         (output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
         (output/'quality-gate.json').write_text(json.dumps(report['quality_gate'],ensure_ascii=False,indent=2)+'\n')
         print('DONE',output/'report.json',json.dumps({'mode':'grouped-dev','calibration_status':calibration['status'],'quality_gate':report['quality_gate']},ensure_ascii=False),flush=True)

@@ -48,13 +48,21 @@ python scripts/validate_calibration.py --data-dir /path/to/new-v2-dataset \
 
 The preflight is stdlib-only, never reads test, and uses the same versioned ordered
 classes as runtime, preserving the legacy source-AST mutation canary. V2 legality
-is checked on train and calibration **before** prior/model work. Required tier/
-vision support gates and optional fixed task-type T=1 are unchanged. No support
-is inferred merely from legal labels.
+is checked on train and calibration **before** prior/model work. Both dataset
+`label-schema.json` and `split-report.json.label_schema` must match the selected
+full question hash, ordered classes and semantic version. Missing, malformed or
+conflicting v2 declarations reject before output/sampling/model work. V1 metadata
+may be absent; explicit conflicts still fail. Required tier/vision support gates
+and optional fixed task-type T=1 are unchanged. No support is inferred merely from
+legal labels. Grouped fitting joins freshly scored B logits by locked IDs, groups,
+labels and version, rejecting missing/duplicate/mismatched B rows. Planning caches
+never supply fitted logits (repair of an inherited #2 defect; Refs #2).
 
 For a future **separately authorized** v2 launch, the launcher forwards both
-`--label-schema` and `--data-dir` unchanged into the actual run. The v1 custom-data
-launch guard is retained. V2 requires a new recipe override `{"synth": false}`:
+`--label-schema` and the validated `--data-dir` into the actual run. Dataset,
+supplemental, roles and recipe paths resolve once against the original caller cwd,
+so changing the child cwd cannot change the validated file identities. Absent
+options add no new historical command flags. The v1 custom-data launch guard is retained. V2 requires a new recipe override `{"synth": false}`:
 legacy `--synth` is incompatible, not silently reinterpreted. Optional repeatable
 `--supplemental <v2.jsonl>` loads explicitly synthetic, split-independent examples
 into **train only, after real prior preflight**, never into calibration/test. The
@@ -64,7 +72,11 @@ in `effective_config.supplemental_rows`; the prior still excludes synthetic rows
 `model_utils.load_engine(..., schema_version=...)` tags the engine; `request_for`
 and `score` use its bound version, rejecting an explicit mismatch. The SAME
 truncation implementation serves both versions and train/serve. Scoring checks
-logit width; v2 predictions carry `task_label_schema_version`.
+logit width; v2 predictions carry `task_label_schema_version`. `predict_rows`
+validates the entire input's selected semantics before any score call, then checks
+score version/width without re-stamping input metadata. It retains all source,
+group, synthetic and supplemental-only provenance (excluding duplicate prompt
+text). Scored supplemental rows still cannot supply real calibration/metrics.
 
 New v2 runs write `label-schema.json` and `calibration.json.label_schema`, each
 containing `task_label_schema_version`, `question_sha256` (canonical full question
@@ -86,8 +98,10 @@ fitter refuses v2; v2 uses grouped calibration only). V1 keeps its fixed seven
 class denominator; v2 uses six and records its version. V2 rejects unversioned or
 illegal rows, supplemental support, and old seven-class probabilities instead of
 coercing them. A v2 metric is not directly comparable to a frozen-v1 metric.
-The legacy split-report CLI is not a v2 evaluator: it fails closed on scored v2 rows;
-use the explicit metrics API for v2 until reporting-version integration is added.
+The legacy split-report CLI/API is not a v2 evaluator: it fails closed on v2
+aggregate metadata, unscored/scored rows and all early-return paths. V2 run reports
+record an honest unavailable diagnostic without calling that reader; use the
+explicit metrics API for v2 until reporting-version integration is added.
 
 ## Supplemental examples and outstanding acceptance
 
@@ -113,7 +127,8 @@ Legal schemas and synthetic passes do not establish any support/performance goal
   reader/preflight, DATA/README docs.
 - #24 splitter: feed only resolved v2 labels while preserving duplicate unions,
   immutable outputs and pending counts; its objectives/feasibility remain separate.
-  Overlap: prepare and DATA/README docs. Exact #8 dependency a77f9af was merged here, including reviewed split-v2, but not approved/main.
+  Overlap: prepare and DATA/README docs. #8 intake is integrated unchanged here,
+  including reviewed split-v2; upstream #8 is now approved/merged (supplied main `32ad23a`).
 - #6/#23 server/policy: retain the new label-schema startup gate and response field
   beside policy-cause/identity/effort schema fields; preserve execution permissions.
   Overlap: server, README docs, ASGI tests. No routes/capabilities were changed.
@@ -149,7 +164,8 @@ metadata stays under `label_schema`, with the semantic key, hash and ordered cla
 | v2 (explicit) | frozen-v1 algorithm | reviewed expert-only, new separate output | supported; pending/excluded ledger retained, never supervised; duplicate unions precede exclusion |
 | v2 | frozen-v1 algorithm | unified/measured/routes or prepare --preflight | unsupported; dispatcher refuses before input reads/writes |
 | v2 | split-v2 | any source | unsupported; explicit CLI refuses before reads/writes; undeclared v2 inputs fail validation before directory creation |
-| v2 | already prepared expert splits | structural calibration preflight, launcher dry-run, training interfaces, score/server/metrics | supported with matching explicit semantics/complete run metadata; no actual training performed |
+| v2 | already prepared expert splits | structural calibration preflight, launcher dry-run, training interfaces, score/server/metrics | supported with matching explicit semantics and complete dataset + run metadata; no actual training performed |
+| v2 | any | frozen-v1 split-report CLI/API | unsupported for aggregates and unscored/scored rows; run diagnostic unavailable, explicit metrics API retained |
 
 A split-v2 expert output can be evaluated only through an explicit future filename
 adapter: current launcher reads train.jsonl/calibration.jsonl, not split-v2 names.
@@ -159,10 +175,9 @@ Neither task version admits measured shadow rows into supervision or metrics.
 Source API alone remains byte-for-byte upstream; version composition is owned by
 the dispatcher and task-boundary validator, not a reinterpretation inside #8.
 
-The merged #8 commit is a **strong pending dependency**, not approved/main. Do not
-publish this candidate until its independent round-2 review passes and upstream is
-merged. This integrated SHA needs a fresh FULL red-team; no previous approval
-transfers. #6/#23 were NOT imported: future coexistence must compose server startup
+Upstream #8 is **approved and merged** (main `32ad23a`, user-supplied status;
+no network recheck). This #18 fix's final SHA still needs a fresh FULL independent
+red-team; no previous approval transfers. #6/#23 were NOT imported: future coexistence must compose server startup
 schema gate, response semantic version, policy causes, candidate identity/effort and
 execution permissions together. Original #18 remains OPEN: six uncertain reviews,
 16 creative prediction-blind reviews and real provenance/support/no-leak evidence
@@ -171,4 +186,7 @@ remain external (Refs #5, #8, #24, #26, #27; calibration/loss dependencies #19�
 中文：来源版本整数与任务语义版本分离；#8 模块/API 原样保留，#18 使用独立模块和
 `task_label_schema_version`。v2 仅支持旧切分算法的专家新目录与显式后续接口；
 v2+统一/实测/prepare预检/split-v2 均在写入前拒绝，不声称真实 v2 重切成功。
-#8 仍是待独立二轮通过并合入上游的强依赖；集成 SHA 必须全新完整红队，不能沿用批准。
+#8 已批准合入上游（用户提供 main `32ad23a`）；本轮集成修复的最终 SHA 必须全新独立完整红队，不能沿用批准。
+预检/运行先核对两个 v2 数据集文档的完整版本/哈希/类别顺序；调用者相对路径解析一次。
+新鲜 B 组分数严格关联后拟合，预测保留仅训练溯源；旧 v1 报告拒绝 v2 聚合/无分数/有分数输入，
+v2 run 诊断如实不可用，显式版本 metrics API 保留。

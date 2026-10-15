@@ -35,12 +35,17 @@ def predicted(row, selected=ls.V2):
     return row
 
 
-def write_fixture(directory):
-    train=v2_rows(fixtures.make_train_rows());pool=v2_rows(fixtures.make_pool())
+def write_fixture(directory,schema_version=ls.V2):
+    train=fixtures.make_train_rows();pool=fixtures.make_pool()
+    if schema_version==ls.V2:train=v2_rows(train);pool=v2_rows(pool)
     fixtures.write_jsonl(directory/'train.jsonl',train)
     fixtures.write_jsonl(directory/'calibration.jsonl',pool)
     (directory/'test.jsonl').write_text('DO NOT READ TEST: INVALID JSON')
     roles=directory/'roles.json';roles.write_text(json.dumps(fixtures.make_roles(pool)))
+    if schema_version==ls.V2:
+        meta=ls.metadata(ls.V2)
+        (directory/'label-schema.json').write_text(json.dumps(meta))
+        (directory/'split-report.json').write_text(json.dumps({'label_schema':meta,'splits':{}}))
     return train,pool,roles
 
 

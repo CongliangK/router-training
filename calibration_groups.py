@@ -722,6 +722,8 @@ def select_tau_oof(plan, rows, prior, checkpoint_ref, protocol=None):
     scored = {}
     for row in rows:
         rid = row.get('id') if isinstance(row, dict) else None
+        if not isinstance(rid,str) or not rid:
+            raise PlanError('scored rows require non-empty string ids (values withheld)')
         if rid in scored:
             raise PlanError('scored rows contain duplicate ids (values withheld)')
         scored[rid] = row
@@ -730,6 +732,12 @@ def select_tau_oof(plan, rows, prior, checkpoint_ref, protocol=None):
     if missing or extra:
         raise PlanError(f'scored rows do not match role B exactly: missing={missing} extra={extra}; '
                         'roles A/C and any test rows must never reach temperature/tau fitting')
+    for planned in b_rows:
+        fresh=scored[planned['id']]
+        if fresh.get('split_group')!=planned['split_group'] or fresh.get('label')!=planned.get('label'):
+            raise PlanError('scored role-B group/label differs from the locked plan (values withheld)')
+        if 'group' in fresh and fresh['group']!=planned.get('group'):
+            raise PlanError('scored role-B root differs from the locked plan (values withheld)')
     for row in rows:
         for head, spec in heads.items():
             values = (row.get('logits') or {}).get(head)
@@ -748,6 +756,10 @@ def select_tau_oof(plan, rows, prior, checkpoint_ref, protocol=None):
                 raise PlanError(f'prior missing or malformed for adjusted head {head} '
                                 '(probabilities must be finite numbers in (0, 1]; bools rejected)')
 
+    # Red-team #18 F1 / Refs #2: the inherited selector validated fresh scores
+    # but fitted raw/cached planning rows. Join ONLY after exact identity checks;
+    # plan labels/groups stay locked, submitted logits alone are authoritative.
+    b_rows=[{**row,'logits':scored[row['id']]['logits']} for row in b_rows]
     fit = proto.get('fit') or fit_temperature
     score = proto.get('score') or score_holdout
     select = proto.get('selector') or default_selector
