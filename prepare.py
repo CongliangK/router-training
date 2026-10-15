@@ -126,16 +126,37 @@ def prepare(root: Path, seed=20261010, similarity=.88, *, outcomes=None, routes=
         with (root/filename).open('x' if unified else 'w',encoding='utf-8') as output:output.write(text)
     print(report_json)
 
-if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('--data',type=Path,default=Path(__file__).parent/'data');p.add_argument('--seed',type=int,default=20261010)
-    p.add_argument('--unified',action='store_true',help='Create a fresh output bundle with unified labels and a separate measured shadow partition')
-    p.add_argument('--outcomes',type=Path,help='Full outcomes.py v2 audit JSON, never a bare measured label list')
-    p.add_argument('--routes',type=Path,help='Explicit candidate routes matching the measured preregistration')
-    p.add_argument('--preflight',action='store_true',help='Validate finite JSON, structure/gate and output conflicts; no splitting, writes, torch or models')
-    a=p.parse_args()
+# Explicit new entry points; the legacy split algorithm/defaults above stay unchanged.
+from split_v2 import prepare_v2, split_v2
+
+
+def main(argv=None):
+    p=argparse.ArgumentParser();p.add_argument('--data',type=Path,default=None);p.add_argument('--seed',type=int,default=20261010)
+    p.add_argument('--split-version',choices=['frozen-v1','split-v2'],default='frozen-v1')
+    p.add_argument('--output',type=Path,help='split-v2 only: fresh, nonexistent bundle directory (parent must exist)')
+    p.add_argument('--unified',action='store_true',help='frozen-v1 only: create a fresh output bundle with unified labels and a separate measured shadow partition')
+    p.add_argument('--outcomes',type=Path,help='frozen-v1 only: full outcomes.py v2 audit JSON, never a bare measured label list')
+    p.add_argument('--routes',type=Path,help='frozen-v1 only: explicit candidate routes matching the measured preregistration')
+    p.add_argument('--preflight',action='store_true',help='frozen-v1 only: validate finite JSON, structure/gate and output conflicts; no splitting, writes, torch or models')
+    a=p.parse_args(argv)
+    if a.split_version=='split-v2':
+        # These contracts have distinct output lifecycles. Never silently drop
+        # measured evidence or turn a requested no-write preflight into a split.
+        unsupported=[flag for flag,value in (('--unified',a.unified),('--outcomes',a.outcomes),
+                     ('--routes',a.routes),('--preflight',a.preflight)) if value]
+        if unsupported:p.error('split-v2 does not support '+', '.join(unsupported)+'; use --split-version frozen-v1 for unified intake/preflight')
+        if a.data is None or a.output is None:p.error('split-v2 requires explicit --data and --output')
+        report=prepare_v2(a.data,a.output,seed=a.seed)
+        print(json.dumps(report,ensure_ascii=False,indent=2))
+        return 0 if report['status']=='feasible' else 2
+    if a.output is not None:p.error('--output requires --split-version split-v2')
     if a.outcomes and not a.routes:p.error('--outcomes requires --routes')
     if a.routes and not a.outcomes:p.error('--routes requires --outcomes')
     evidence=json.loads(a.outcomes.read_text()) if a.outcomes else None
     if a.outcomes and not isinstance(evidence,dict):p.error('--outcomes requires a full v2 audit object')
-    prepare(a.data,a.seed,outcomes=evidence,
+    prepare(a.data if a.data is not None else Path(__file__).parent/'data',a.seed,outcomes=evidence,
             routes=json.loads(a.routes.read_text()) if a.routes else None,unified=a.unified,preflight=a.preflight)
+    return 0
+
+
+if __name__=='__main__':raise SystemExit(main())
