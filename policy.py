@@ -95,9 +95,12 @@ def select(prediction,routes,has_image=False,minimum_confidence=.9,*,vision_poli
     selected=route['tier'] if route else None
     # Compare against the SAME required tier without the vision constraint. This
     # prevents attributing a missing intermediate tier or truncation to vision.
-    if needs_vision and candidates and (not route or TIERS.index(selected)>TIERS.index(candidates[0]['tier'])):
+    baseline=candidates[0] if candidates else None
+    if needs_vision and baseline and (not route or TIERS.index(selected)>TIERS.index(baseline['tier'])):
         event('vision_forced','vision-capability-upgrade' if route else 'vision-capability-refusal',bool(route))
-    elif route and selected!=required:
+    # A nonvision tier gap can coexist with an additional vision upgrade. Measure
+    # it independently: selected!=required alone would double-count vision-only gaps.
+    if route and baseline['tier']!=required:
         event('risk_policy','authorized-tier-unavailable',True)
     if not route:
         reasons.append('no-authorized-route-meets-required-capability')

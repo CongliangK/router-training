@@ -78,6 +78,63 @@ class PolicyReplayTests(unittest.TestCase):
         self.assertNotIn('vision_forced',[e['category'] for e in d['reason_details']])
         self.assertIn('authorized-tier-unavailable',[e['code'] for e in d['reason_details']])
 
+    def test_sparse_tier_gap_and_vision_upgrade_coexist_with_text_control(self):
+        routes=[{'tier':'balanced','provider':'synthetic','model':'balanced-text','vision':False},
+            {'tier':'flagship','provider':'synthetic','model':'flagship-vision','vision':True}]
+        original=copy.deepcopy(routes)
+        for options in [{},{'vision_policy':'positive-v2','vision_positive_threshold':.35}]:
+            for p,selected in [(.01,'balanced'),(.99,'flagship')]:
+                with self.subTest(options=options,p=p):
+                    pred=prediction(p,tier='fast')
+                    d=select(pred,routes,**options)
+                    self.assertEqual((d['model_tier'],d['required_tier'],d['selected_tier']),('fast','fast',selected))
+                    self.assertEqual(d['recommendation'],{'provider':'synthetic','model':selected+('-text' if p==.01 else '-vision')})
+                    self.assertEqual(d['needs_vision'],p==.99)
+                    expected=[{'category':'model_choice','code':'classifier-tier','upgraded':False,'tier':'fast'}]
+                    if p==.99:expected.append({'category':'vision_forced','code':'vision-capability-upgrade','upgraded':True})
+                    expected.append({'category':'risk_policy','code':'authorized-tier-unavailable','upgraded':True})
+                    self.assertEqual(d['reason_details'],expected)
+                    self.assertEqual(d,select(pred,list(reversed(routes)),**options))
+                    self.assertEqual(pred,prediction(p,tier='fast'));json.dumps(d,allow_nan=False)
+        self.assertEqual(routes,original)
+
+    def test_vision_only_upgrade_does_not_invent_nonvision_tier_gap(self):
+        for tier in ['fast','balanced']:
+            routes=[{'tier':tier,'provider':'synthetic','model':'text','vision':False},
+                {'tier':'flagship','provider':'synthetic','model':'vision','vision':True}]
+            for options in [{},{'vision_policy':'positive-v2','vision_positive_threshold':.35}]:
+                with self.subTest(tier=tier,options=options):
+                    d=select(prediction(.99,tier=tier),routes,**options)
+                    self.assertEqual((d['model_tier'],d['required_tier'],d['selected_tier']),(tier,tier,'flagship'))
+                    self.assertEqual(d['reason_details'],[
+                        {'category':'model_choice','code':'classifier-tier','upgraded':False,'tier':tier},
+                        {'category':'vision_forced','code':'vision-capability-upgrade','upgraded':True}])
+
+    def test_replay_overlapping_upgrade_causes_use_decision_denominators(self):
+        routes=[{'tier':'balanced','provider':'synthetic','model':'balanced-text','vision':False},
+            {'tier':'flagship','provider':'synthetic','model':'flagship-vision','vision':True}]
+        text={'prediction':prediction(.01,tier='fast'),'has_image':False,'vision_label':'no'}
+        vision={'prediction':prediction(.99,tier='fast'),'has_image':False,'vision_label':'yes'}
+        unchanged={'prediction':prediction(.99,tier='flagship'),'has_image':False,'vision_label':'yes'}
+        for options in [{},{'vision_policy':'positive-v2','vision_positive_threshold':.35}]:
+            with self.subTest(options=options):
+                one=replay([vision],routes,**options)
+                self.assertEqual((one['rows'],one['upgrades'],one['refusals']),(1,1,0))
+                expected={'model_choice':0,'vision_forced':1,'context_truncation':0,'risk_policy':1}
+                self.assertEqual(one['upgrade_reason_counts'],expected)
+                self.assertEqual(one['upgrade_reason_shares'],expected)
+                self.assertEqual(sum(one['upgrade_reason_shares'].values()),2)
+                control=replay([text],routes,**options)
+                self.assertEqual(control['upgrade_reason_counts'],{**expected,'vision_forced':0})
+                self.assertEqual(control['upgrade_reason_shares'],{**expected,'vision_forced':0})
+                mixed=replay([text,vision,unchanged],routes,**options)
+                self.assertEqual((mixed['rows'],mixed['upgrades'],mixed['refusals']),(3,2,0))
+                self.assertEqual(mixed['upgrade_rate'],2/3)
+                self.assertEqual(mixed['reason_counts'],{'model_choice':3,'vision_forced':1,'context_truncation':0,'risk_policy':2})
+                self.assertEqual(mixed['reason_rates'],{'model_choice':1,'vision_forced':1/3,'context_truncation':0,'risk_policy':2/3})
+                self.assertEqual(mixed['upgrade_reason_counts'],{**expected,'risk_policy':2})
+                self.assertEqual(mixed['upgrade_reason_shares'],{**expected,'vision_forced':.5})
+
     def test_unique_identity_and_declared_effort_only(self):
         route={'tier':'balanced','provider':'synthetic','model':'one','vision':True,
             'reasoning_effort':'not-verified','route_id':'r1','model_version':'v1'}
