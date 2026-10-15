@@ -143,6 +143,34 @@ evidence remains required (#26); frozen-v1/private prediction verification is
 external acceptance (#27). Synthetic CPU tests establish metric behavior, not
 real model improvement or production readiness.
 
+## CPU research protocols (Refs #21, Refs #26 — both remain open)
+
+New [OOF/CRC/soup contracts](oof_protocol.py) and [cascade protocol](cascade_protocol.py)
+are **development prototypes, not production qualifications**. Whole audited-root
+folds require explicit train/calibration sources, feasible tier/vision support and
+independent per-fold fit/A/B/C roles with row/epoch provenance. Correlated OOF is
+not fixed-model calibration; soup descriptors are checked without loading or
+averaging weights, and OOF thresholds cannot certify a refit/soup model.
+
+The CRC step-loss solver states fixed-model/exchangeable-unit assumptions and
+expected-risk (not high-probability/per-group) scope. Unapproved or unsupported
+protocols stay exploratory/infeasible. Root-first cascade sampling freezes
+candidate identities, budgets, stopping and independent fixed confirmation;
+correlated repeats/selective supplements never become IID CP evidence or
+per-task measured labels. The equal-root Hoeffding/Bonferroni arithmetic is a
+restricted finite-frame diagnostic, not certified real-world coverage. Draft
+plan hashes and approval references do not verify approval or independence.
+Synthetic outputs always remain unqualified/shadow; existing outcomes and
+production gates are unchanged.
+
+See the [preregisterable contract and external acceptance ledger](research/cpu-protocols-21-26.md).
+The [synthetic-only CPU demonstration](scripts/protocol_demo.py) accepts no model
+or data paths and performs no training/execution:
+
+```sh
+CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python scripts/protocol_demo.py
+```
+
 ## Versioned routing policy and replay (issues #6 / #23)
 
 The conservative `legacy-v1` vision policy remains the default; no real candidate
