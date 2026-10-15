@@ -39,7 +39,7 @@ async def request(app,path,body=None):
     return status,json.loads(payload)
 
 
-def exercise(gate,mode='diagnostic',pred=None,routes=None):
+def exercise(gate,mode='diagnostic',pred=None,routes=None,has_image=False,**policy_options):
     async def run():
         with tempfile.TemporaryDirectory(prefix='router-contract-') as directory,ExitStack() as stack:
             root=Path(directory);artifacts=root/'artifacts'/'synthetic-run'
@@ -51,10 +51,10 @@ def exercise(gate,mode='diagnostic',pred=None,routes=None):
             loader=stack.enter_context(patch.object(server,'load_engine',return_value=object()))
             scorer=stack.enter_context(patch.object(server,'score',return_value=pred or prediction()))
             observation=stack.enter_context(patch.object(server,'record_observation'))
-            app=server.create_app('synthetic-run',routes=routes,mode=mode)
+            app=server.create_app('synthetic-run',routes=routes,mode=mode,**policy_options)
             async with app.router.lifespan_context(app):
                 health=await request(app,'/health')
-                result=await request(app,'/route',{'prompt':'Synthetic contract exercise.'})
+                result=await request(app,'/route',{'prompt':'Synthetic contract exercise.','has_image':has_image})
                 health_after=await request(app,'/health')
             unloaded=await request(app,'/health')
             assert not (root/'observations').exists()
@@ -138,6 +138,52 @@ class ServerContractTests(unittest.TestCase):
         status,payload=asyncio.run(request(app,'/route',{'prompt':'Synthetic request.'}))
         self.assertEqual(status,503);self.assert_permission(payload['detail'],False,'execution')
         self.assertEqual(payload['detail']['reason'],'model-not-loaded')
+
+    def test_versioned_policy_metadata_and_reasons_pass_through(self):
+        routes=[{'tier':'balanced','provider':'synthetic','model':'vision','vision':True,
+                 'reasoning_effort':'declared-only','model_version':'v1','route_id':'one'}]
+        options={'vision_policy':'positive-v2','vision_positive_threshold':.35}
+        for mode in ['diagnostic','execution']:
+            result=exercise({'passed':True,'mode':'qualified'},mode,prediction('balanced'),routes,True,**options)[1]
+            self.assertEqual(result[0],200);d=result[1]
+            self.assertEqual(d['decision_schema_version'],1);self.assertEqual(d['recommendation_contract_version'],1)
+            self.assertEqual((d['model_tier'],d['required_tier'],d['selected_tier']),('balanced',)*3)
+            self.assertTrue(d['needs_vision']);self.assertEqual(d['vision_policy'],'positive-v2')
+            self.assertEqual(d['recommendation']['reasoning_effort'],'declared-only')
+            self.assertEqual(d['recommendation']['route_id'],'one')
+            self.assertTrue(d['reason_details']);self.assert_permission(d,mode=='execution',mode)
+
+    def test_missing_invalid_probabilities_are_json_safe_and_fail_closed(self):
+        for value in [None,{}, {'yes':float('nan')},{'yes':True},{'yes':-1}, {'yes':'0.1'}]:
+            pred=prediction('balanced');pred['answers']['vision']['probabilities']=value
+            for mode in ['diagnostic','execution']:
+                result=exercise({'passed':True,'mode':'qualified'},mode,pred,
+                    [{'tier':'balanced','provider':'synthetic','model':'text','vision':False}],
+                    vision_policy='positive-v2',vision_positive_threshold=.35)[1]
+                d=result[1] if mode=='diagnostic' else result[1]['detail']
+                self.assertEqual(result[0],200 if mode=='diagnostic' else 503)
+                self.assertIsNone(d['vision_probability']);self.assertTrue(d['needs_vision'])
+                self.assertIsNone(d['selected_tier']);self.assertIsNone(d['recommendation'])
+                self.assertTrue(d['reason_details']);self.assert_permission(d,False,mode)
+
+    def test_context_and_vision_reason_contracts(self):
+        pred=prediction('balanced');pred['context_truncated']=True
+        pred['answers']['tier']['confidence']=.4
+        d=exercise({'passed':False,'mode':'shadow'},pred=pred)[1][1]
+        self.assertEqual((d['model_tier'],d['required_tier'],d['selected_tier']),('balanced','flagship','flagship'))
+        self.assertEqual([e['category'] for e in d['reason_details']],['model_choice','context_truncation','risk_policy'])
+        self.assert_permission(d,False,'diagnostic')
+        pred=prediction('balanced','yes');pred['answers']['vision']['probabilities']['yes']=.99
+        d=exercise({'passed':False,'mode':'shadow'},pred=pred)[1][1]
+        self.assertEqual([e['category'] for e in d['reason_details']],['model_choice','vision_forced'])
+        self.assertEqual(d['selected_tier'],'flagship');self.assert_permission(d,False,'diagnostic')
+
+    def test_policy_configuration_is_explicit_and_does_not_bypass_shadow_gate(self):
+        with self.assertRaises(ValueError):server.create_app(vision_policy='positive-v2')
+        with self.assertRaises(ValueError):server.create_app(vision_positive_threshold=.35)
+        result=exercise({'passed':False,'mode':'shadow'},'execution',
+            vision_policy='positive-v2',vision_positive_threshold=.35)
+        self.assertEqual(result[1][0],503);self.assertEqual(result[4],0)
 
     def test_unreadable_gate_fails_closed(self):
         with patch.object(Path,'read_text',side_effect=PermissionError):gate=server.read_gate(Path('synthetic-gate'))
