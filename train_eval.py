@@ -112,11 +112,19 @@ def build_optimizer(optimizer_name,params,effective_lr):
     return torch.optim.AdamW(params,lr=effective_lr,weight_decay=.01,foreach=False)
 
 
+def require_selection_score(score):
+    # Metric definition v2 makes unsupported evaluations null. Never coerce
+    # missing evidence to zero or let it reach comparisons/rounding/sorting.
+    if isinstance(score,bool) or not isinstance(score,(int,float)) or not math.isfinite(score) or not 0<=score<=1:
+        raise ValueError('checkpoint selection macro-F1 is unavailable or invalid; supported tier evaluation is required')
+    return score
+
+
 def top_swa_epochs(history):
     # The SWA pool's single definition of "best": top-K epochs by selection
     # macro-F1 (stable sort — an earlier epoch wins a tie, exactly like the
     # archived sorted() expression).
-    return [h['epoch'] for h in sorted(history,key=lambda h:h['calibration_macro_f1'],reverse=True)[:SWA_POOL_SIZE]]
+    return [h['epoch'] for h in sorted(history,key=lambda h:require_selection_score(h['calibration_macro_f1']),reverse=True)[:SWA_POOL_SIZE]]
 
 
 def update_swa_pool(swa_pool,history,snapshot):
@@ -182,6 +190,9 @@ def predict_rows(engine,rows):
     for i,row in enumerate(rows):
         start=time.perf_counter(); prediction=score(engine,row['prompt'])
         output.append({'id':row['id'],'label':row['label'],**prediction,'latency_ms':(time.perf_counter()-start)*1000})
+        # Keep the real grouping identity for cluster evaluation; never infer
+        # independent rows when source grouping was not supplied.
+        if 'split_group' in row:output[-1]['split_group']=row['split_group']
         if (i+1)%25==0:print('scored',i+1,'/',len(rows),flush=True)
     return output
 
@@ -217,61 +228,200 @@ def calibrated(rows,temperatures,adjustments=None):
     return rows
 
 
-def per_class(valid,field):
-    """TP/FP/FN/TN, precision, recall, F1 per class for one field."""
+def per_class(valid,field,low_support_threshold=10):
+    """Fixed-schema macro F1; undefined class ratios are null, never evidence.
+
+    Historical macro-F1 includes EVERY schema class with zero_division=0.
+    Keep that convention explicit, even when a class F1 itself is undefined.
+    An entirely empty evaluation has no macro score.
+    """
+    if type(low_support_threshold) is not int or low_support_threshold<1:
+        raise ValueError('low_support_threshold must be a positive integer')
     labels=list(QUESTIONS[field]['criteria']);n=len(valid);out={}
     for c in labels:
         tp=sum(1 for r in valid if r['answers'][field]['choice']==c and target(r,field)==c)
         fp=sum(1 for r in valid if r['answers'][field]['choice']==c and target(r,field)!=c)
         fn=sum(1 for r in valid if r['answers'][field]['choice']!=c and target(r,field)==c)
-        prec=tp/max(1,tp+fp);rec=tp/max(1,tp+fn)
-        out[c]={'tp':tp,'fp':fp,'fn':fn,'tn':n-tp-fp-fn,'precision':prec,'recall':rec,'f1':2*prec*rec/max(1e-9,prec+rec)}
-    out['macro_f1']=sum(out[c]['f1'] for c in labels)/len(labels)
+        out[c]={'tp':tp,'fp':fp,'fn':fn,'tn':n-tp-fp-fn,'support':tp+fn,'predicted_support':tp+fp,
+                'low_support':tp+fn<low_support_threshold,
+                'precision':tp/(tp+fp) if tp+fp else None,
+                'recall':tp/(tp+fn) if tp+fn else None,
+                'f1':2*tp/(2*tp+fp+fn) if 2*tp+fp+fn else None}
+    out['macro_f1']=sum(out[c]['f1'] or 0 for c in labels)/len(labels) if n else None
+    out['macro_f1_definition']={'classes':labels,'denominator':len(labels),'zero_division':0,
+                                'empty_evaluation':None,'excluded_classes':[]}
+    out['low_support_threshold']=low_support_threshold
+    out['low_support_classes']=[c for c in labels if out[c]['low_support']]
+    out['warning']='Low-support classes remain in fixed-class macro-F1; do not select a model by this metric alone.' if out['low_support_classes'] else None
     return out
 
 
 def bootstrap_ci(valid,field,statistic,samples=1000,seed=0):
-    """95% bootstrap CI for a statistic(valid). Resamples independent split_group
-    clusters, not rows: near-duplicate tasks inside one group are correlated and
-    row-level resampling would understate the interval (red-team finding)."""
-    import collections as _c
-    groups=_c.defaultdict(list)
-    for r in valid:groups[r.get('split_group',r['id'])].append(r)
-    buckets=list(groups.values());rng=random.Random(seed);values=[]
+    """95% percentile interval, resampling the FULL field-valid group pool.
+
+    Do not prefilter to a target class before sampling: whole groups are the
+    independent units. Undefined ratio draws are omitted, explicitly counted,
+    and intervals are conditional on nonzero denominators. Fewer than two
+    groups cannot support an empirical cluster interval. Missing group IDs do
+    not establish independence, so never silently substitute row IDs.
+    """
+    if type(samples) is not int or samples<2:raise ValueError('samples must be an integer >= 2')
+    out={'low':None,'high':None,'status':'unavailable','method':'whole-group percentile bootstrap',
+         'confidence_level':.95,'field':field,'evaluated_rows':len(valid),'independent_groups':0,
+         'supporting_groups':0,'requested_resamples':samples,'valid_resamples':0,'undefined_resamples':0,'seed':seed,
+         'scope':'all field-valid rows; conditional on a nonzero statistic denominator'}
+    if not valid:out['reason']='no evaluated rows';return out
+    groups=collections.defaultdict(list)
+    for r in valid:
+        group=r.get('split_group')
+        if not isinstance(group,str) or not group.strip():
+            out['reason']='missing valid split_group; row independence is not assumed';return out
+        groups[group].append(r)
+    buckets=list(groups.values());out['independent_groups']=len(buckets)
+    out['supporting_groups']=sum(statistic(bucket) is not None for bucket in buckets)
+    if len(buckets)<2:out['reason']='fewer than two independent groups';return out
+    if statistic(valid) is None:out['reason']='statistic has no denominator support';return out
+    if out['supporting_groups']<2:out['reason']='fewer than two groups support the statistic denominator';return out
+    rng=random.Random(seed);values=[]
     for _ in range(samples):
-        draw=[row for bucket in (rng.choice(buckets) for _ in buckets) for row in bucket];values.append(statistic(draw))
+        draw=[row for bucket in (rng.choice(buckets) for _ in buckets) for row in bucket]
+        value=statistic(draw)
+        if value is None:out['undefined_resamples']+=1
+        elif not math.isfinite(value):raise ValueError('bootstrap statistic must be finite or None')
+        else:values.append(value)
+    out['valid_resamples']=len(values)
+    if len(values)<2:out['reason']='fewer than two defined resamples';return out
     values.sort()
-    return {'low':values[int(.025*len(values))],'high':values[min(len(values)-1,int(.975*len(values)))]}
+    out.update(low=values[int(.025*len(values))],high=values[min(len(values)-1,int(.975*len(values)))],status='available',
+               warning='Few groups and conditional resampling can understate uncertainty; this interval is not a production qualification.')
+    return out
 
 
-def metrics(rows):
-    result={'rows':len(rows),'context_truncated':sum(r['context_truncated'] for r in rows),'mean_latency_ms':sum(r['latency_ms'] for r in rows)/max(1,len(rows))}
+def validate_answer(answer,labels):
+    """Fail closed on malformed probabilities rather than emit invalid scores."""
+    probs=answer['probabilities'];confidence=answer['confidence']
+    if answer['choice'] not in labels or set(probs)!=set(labels):
+        raise ValueError('prediction must use the complete fixed class schema')
+    for value in [*probs.values(),confidence]:
+        if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value) or not 0<=value<=1:
+            raise ValueError('probabilities and confidence must be finite numbers in [0,1]')
+    if not math.isclose(sum(probs.values()),1,rel_tol=0,abs_tol=1e-6):
+        raise ValueError('probabilities must sum to one')
+    if not math.isclose(confidence,probs[answer['choice']],rel_tol=0,abs_tol=1e-6):
+        raise ValueError('confidence must equal the chosen class probability')
+
+
+def calibration_bins(valid,field):
+    # No epsilon on an upper edge: it double-counted internal boundaries
+    # (all correct at confidence .4 gave ECE 1.2 instead of .6; issue #3).
+    from bisect import bisect_right
+    edges=[0,.2,.4,.6,.8,1.];buckets=[[] for _ in range(5)];out=[]
+    for row in valid:buckets[bisect_right(edges[1:-1],row['answers'][field]['confidence'])].append(row)
+    for i,bucket in enumerate(buckets):
+        n=len(bucket)
+        confidence=sum(r['answers'][field]['confidence'] for r in bucket)/n if n else None
+        accuracy=sum(r['answers'][field]['choice']==target(r,field) for r in bucket)/n if n else None
+        weight=n/len(valid) if valid else None
+        out.append({'lower':edges[i],'upper':edges[i+1],'upper_inclusive':i==4,'count':n,
+                    'weight':weight,'mean_confidence':confidence,'accuracy':accuracy,
+                    'contribution':weight*abs(confidence-accuracy) if n else (0 if valid else None)})
+    return out
+
+
+def routing_costs(valid,cost_matrix=None):
+    """Synthetic ordinal cost, NOT money or measured generation/task success.
+
+    Matrix axes are true tier -> predicted tier. A caller may supply a
+    predeclared finite nonnegative loss matrix with a zero diagonal.
+    """
+    labels=list(TIERS)
+    default=cost_matrix is None
+    if default:cost_matrix={a:{b:abs(i-j) for j,b in enumerate(labels)} for i,a in enumerate(labels)}
+    if not isinstance(cost_matrix,dict) or set(cost_matrix)!=set(labels):raise ValueError('cost matrix must contain every true tier')
+    for a in labels:
+        if not isinstance(cost_matrix[a],dict) or set(cost_matrix[a])!=set(labels):raise ValueError('cost matrix must contain every predicted tier')
+        for b,value in cost_matrix[a].items():
+            if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value) or value<0 or (a==b and value!=0):
+                raise ValueError('cost matrix must be finite, nonnegative, with a zero diagonal')
+    out={'evaluated_rows':len(valid),'cost_basis':'ordinal tier distance (illustrative, not currency)' if default else 'caller-supplied loss units (not validated task success)',
+         'cost_matrix':cost_matrix,'downgrade':{'count':0,'weighted_cost':0},'overroute':{'count':0,'weighted_cost':0},
+         'by_transition':{a:{b:{'count':0,'weighted_cost':0} for b in labels} for a in labels}}
+    for row in valid:
+        true=target(row,'tier');pred=row['answers']['tier']['choice'];cost=cost_matrix[true][pred]
+        cell=out['by_transition'][true][pred];cell['count']+=1;cell['weighted_cost']+=cost
+        if true!=pred:
+            kind='downgrade' if labels.index(pred)<labels.index(true) else 'overroute'
+            out[kind]['count']+=1;out[kind]['weighted_cost']+=cost
+    out['total_weighted_cost']=out['downgrade']['weighted_cost']+out['overroute']['weighted_cost']
+    out['mean_cost']=out['total_weighted_cost']/len(valid) if valid else None
+    return out
+
+
+def metrics(rows,low_support_threshold=10,cost_matrix=None):
+    result={'rows':len(rows),'context_truncated':sum(r['context_truncated'] for r in rows),
+            'mean_latency_ms':sum(r['latency_ms'] for r in rows)/len(rows) if rows else None,
+            'metric_definition_version':2,'nll_probability_floor':1e-12}
+    valid_by_field={}
     for field in QUESTIONS:
         valid=[r for r in rows if target(r,field) in QUESTIONS[field]['criteria']];labels=list(QUESTIONS[field]['criteria'])
-        matrix={label:dict.fromkeys(labels,0) for label in labels};nll=brier=0
+        valid_by_field[field]=valid
+        matrix={label:dict.fromkeys(labels,0) for label in labels};nll=brier=0;n=len(valid)
         for row in valid:
-            expected=target(row,field);answer=row['answers'][field];matrix[expected][answer['choice']]+=1
+            expected=target(row,field);answer=row['answers'][field];validate_answer(answer,labels)
+            matrix[expected][answer['choice']]+=1
             nll-=math.log(max(1e-12,answer['probabilities'][expected]))
-            brier+=sum((p-(label==expected))**2 for label,p in answer['probabilities'].items())
-        correct=sum(matrix[l][l] for l in labels);ece=0
-        for lo in [0,.2,.4,.6,.8]:
-            bucket=[r for r in valid if lo<=r['answers'][field]['confidence']<(lo+.2+1e-8)]
-            if bucket:ece+=len(bucket)/len(valid)*abs(sum(r['answers'][field]['confidence'] for r in bucket)/len(bucket)-sum(r['answers'][field]['choice']==target(r,field) for r in bucket)/len(bucket))
-        result[field]={'evaluated_rows':len(valid),'accuracy':correct/max(1,len(valid)),'nll':nll/max(1,len(valid)),'brier':brier/max(1,len(valid)),'ece_5_bins':ece,'confusion':matrix}
-    flagship=[r for r in rows if r['label']['tier']=='flagship'];vision=[r for r in rows if r['label']['needs_vision']=='yes']
+            brier+=sum((answer['probabilities'][label]-(label==expected))**2 for label in labels)
+        correct=sum(matrix[l][l] for l in labels);bins=calibration_bins(valid,field)
+        pc=per_class(valid,field,low_support_threshold)
+        result[field]={'evaluated_rows':n,'excluded_rows':len(rows)-n,'status':'available' if n else 'unavailable',
+                       'accuracy':correct/n if n else None,'macro_f1':pc['macro_f1'],'nll':nll/n if n else None,
+                       'brier':brier/n if n else None,'ece_5_bins':sum(b['contribution'] for b in bins) if n else None,
+                       'ece_bins':bins,'confusion':matrix}
+        result[field+'_per_class']=pc
+    tier_valid=valid_by_field['tier'];vision_valid=valid_by_field['vision']
+    flagship=[r for r in tier_valid if target(r,'tier')=='flagship'];vision=[r for r in vision_valid if target(r,'vision')=='yes']
     result['flagship_underroute_rate']=sum(r['answers']['tier']['choice']!='flagship' for r in flagship)/len(flagship) if flagship else None
     result['vision_false_negative_rate']=sum(r['answers']['vision']['choice']!='yes' for r in vision)/len(vision) if vision else None
     result['flagship_examples']=len(flagship);result['vision_positive_examples']=len(vision)
-    result['tier_per_class']=per_class([r for r in rows if target(r,'tier') in QUESTIONS['tier']['criteria']],'tier')
-    result['vision_per_class']=per_class([r for r in rows if target(r,'vision') in QUESTIONS['vision']['criteria']],'vision')
-    tier_valid=[r for r in rows if target(r,'tier') in QUESTIONS['tier']['criteria']]
+    result['routing_costs']=routing_costs(tier_valid,cost_matrix)
+    def ratio(rs,field,label,precision=False):
+        subset=[r for r in rs if (r['answers'][field]['choice'] if precision else target(r,field))==label]
+        return sum(r['answers'][field]['choice']==target(r,field) for r in subset)/len(subset) if subset else None
     result['bootstrap']={
-        'tier_accuracy':bootstrap_ci(tier_valid,'tier',lambda rs:sum(r['answers']['tier']['choice']==target(r,'tier') for r in rs)/max(1,len(rs))),
-        'flagship_recall':bootstrap_ci(flagship,'tier',lambda rs:sum(r['answers']['tier']['choice']=='flagship' for r in rs)/max(1,len(rs))) if flagship else None,
-        'flagship_precision':bootstrap_ci(tier_valid,'tier',lambda rs:(lambda tp,fp:tp/max(1,tp+fp))(sum(r['answers']['tier']['choice']=='flagship' and target(r,'tier')=='flagship' for r in rs),sum(r['answers']['tier']['choice']=='flagship' and target(r,'tier')!='flagship' for r in rs))),
-        'vision_recall':bootstrap_ci(vision,'vision',lambda rs:sum(r['answers']['vision']['choice']=='yes' for r in rs)/max(1,len(rs))) if vision else None,
+        'tier_accuracy':bootstrap_ci(tier_valid,'tier',lambda rs:sum(r['answers']['tier']['choice']==target(r,'tier') for r in rs)/len(rs) if rs else None),
+        'flagship_recall':bootstrap_ci(tier_valid,'tier',lambda rs:ratio(rs,'tier','flagship')),
+        'flagship_precision':bootstrap_ci(tier_valid,'tier',lambda rs:ratio(rs,'tier','flagship',True)),
+        'vision_recall':bootstrap_ci(vision_valid,'vision',lambda rs:ratio(rs,'vision','yes')),
     }
     return result
+
+
+def validate_ece_threshold(value):
+    if value is not None and (isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value) or not 0<=value<=1):
+        raise ValueError('max-tier-ece must be a finite number in [0,1]')
+    return value
+
+
+def apply_ece_veto(gate,evaluation,max_tier_ece=None):
+    """Only an additional veto; calibration agreement can NEVER qualify a run.
+
+    The optional threshold must be registered before evaluation, not selected
+    by observing test scores. .25 is a proposal, deliberately NOT a default.
+    """
+    threshold=validate_ece_threshold(max_tier_ece)
+    gate={**gate,'reasons':list(gate.get('reasons',[]))}
+    value=evaluation['tier']['ece_5_bins'] if evaluation is not None else None
+    check={'metric':'tier.ece_5_bins','maximum':threshold,'observed':value,'status':'not_registered'}
+    if threshold is not None:
+        if value is None or isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value) or not 0<=value<=1:
+            check['status']='unavailable';check['observed']=None;gate['passed']=False;gate['mode']='shadow'
+            gate['reasons'].append('Registered tier ECE constraint cannot be assessed: no valid independent evaluation metric.')
+        elif value>threshold:
+            check['status']='veto';gate['passed']=False;gate['mode']='shadow'
+            gate['reasons'].append('Tier ECE exceeds the pre-registered maximum.')
+        else:check['status']='within_limit'
+    gate['calibration_constraint']=check
+    return gate
 
 
 def write_predictions(path,rows):path.write_text(''.join(json.dumps(row,ensure_ascii=False)+'\n' for row in rows))
@@ -371,6 +521,7 @@ def run(args):
     # group-isolated calibration with PRE-REGISTERED A/B/C role groups; the
     # archived row-split calibration is reachable only through the explicit
     # --legacy-calibration flag. No new run may silently fall back to legacy.
+    max_tier_ece=validate_ece_threshold(getattr(args,'max_tier_ece',None))
     legacy=bool(getattr(args,'legacy_calibration',False))
     roles_path=getattr(args,'calibration_roles',None)
     if legacy and roles_path:raise SystemExit('--legacy-calibration and --calibration-roles are mutually exclusive')
@@ -445,6 +596,11 @@ def run(args):
         # Epoch/checkpoint selection reads ONLY role-A groups; temperatures
         # and tau are fitted ONLY on role-B groups later (group isolation).
         selection_rows=plan['rows_by_role']['A']
+    # Both modes must have a defined checkpoint-selection objective BEFORE
+    # model loading or baseline/training work. Legacy row splitting (including
+    # smoke slicing) can otherwise leave an empty/all-unsupported tier pool.
+    if not any(target(row,'tier') in TIERS for row in selection_rows):
+        raise ValueError('checkpoint selection requires at least one supported tier label; no model was loaded')
     engine=load_engine();baseline={}
     if not legacy:
         # Grouped dev runs make no baseline predictions: baseline evaluation
@@ -547,7 +703,7 @@ def run(args):
         model.eval();validation=predict_rows(engine,selection_rows);validation_metrics=metrics(validation)
         # Epoch selection now maximizes tier macro-F1 (imbalance-aware) instead of
         # NLL, which favored the majority class and locked in late conservative epochs.
-        score=validation_metrics['tier_per_class']['macro_f1']
+        score=require_selection_score(validation_metrics['tier_per_class']['macro_f1'])
         history.append({'epoch':epoch+1,'train_loss':running/len(rows),'calibration_macro_f1':score,'calibration_tier_nll':validation_metrics['tier']['nll'],'calibration_vision_recall':None if validation_metrics['vision_false_negative_rate'] is None else round(1-validation_metrics['vision_false_negative_rate'],4)})
         if score>best_score:
             best_score=score
@@ -580,7 +736,7 @@ def run(args):
         soup_state=soup_state_dict(engine.backend.model.state_dict(),avg)
         engine.backend.model.load_state_dict(soup_state);engine.backend.model.eval()
         soup_metrics=metrics(predict_rows(engine,selection_rows))
-        soup_f1=soup_metrics['tier_per_class']['macro_f1']
+        soup_f1=require_selection_score(soup_metrics['tier_per_class']['macro_f1'])
         print('soup macro_f1',round(soup_f1,4),'vs single-best',round(best_score,4),flush=True)
         if soup_f1>=best_score:
             if args.fullft:
@@ -610,6 +766,7 @@ def run(args):
     # (effective LR, oversampled per-epoch update counts, scheduler shape,
     # final SWA pool members) — recorded separately from raw CLI input.
     effective=effective_config(args,raw_train_rows,epoch_row_counts,scheduler_report,swa_pool)
+    effective['evaluation_policy']={'max_tier_ece':max_tier_ece,'metric_definition_version':2}
     if not legacy:
         # Grouped calibration tail (issue #2): score ONLY role-B rows with the
         # A-selected checkpoint, select tau/T out-of-fold over B's whole-group
@@ -641,6 +798,7 @@ def run(args):
         if calibration['status']!='selected':
             reasons.append('No feasible tau under the registered protocol: temperatures were not calibrated and NO calibration.json was written; the server refuses to load this run rather than serve unadjusted logits.')
         report={'run':args.run,'seed':args.seed,'mode':'grouped-dev','base_model':json.loads((ROOT/'model-manifest.json').read_text()),'training':{'epochs':args.epochs,'rank':args.rank,'lr':effective_lr,'accumulation':args.accumulation,'trainable_parameters':trainable,'optimizer_updates':updates,'seconds':time.perf_counter()-start,'history':history},'effective_config':effective,'evaluation_basis':'group-isolated development calibration (A: checkpoint selection, B: out-of-fold temperature/tau); NOT an independent evaluation','calibration':calibration,'tier_class_weights':weights,'vision_class_weights':vision_weights,'quality_gate':{'passed':False,'mode':'shadow','reasons':reasons},'split_report':json.loads((ROOT/'data/split-report.json').read_text())}
+        report['quality_gate']=apply_ece_veto(report['quality_gate'],None,max_tier_ece)
         (output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
         (output/'quality-gate.json').write_text(json.dumps(report['quality_gate'],ensure_ascii=False,indent=2)+'\n')
         print('DONE',output/'report.json',json.dumps({'mode':'grouped-dev','calibration_status':calibration['status'],'quality_gate':report['quality_gate']},ensure_ascii=False),flush=True)
@@ -667,14 +825,14 @@ def run(args):
         adjusted=calibrated(calib_valid,temps,{'tier':adj})
         pc=per_class(adjusted,'tier')
         fp_rate=pc['flagship']['fp']/max(1,pc['flagship']['fp']+pc['flagship']['tn'])
-        sweep.append({'tau':tau,'macro_f1':round(pc['macro_f1'],4),'flagship_recall':round(pc['flagship']['recall'],4),'flagship_fp_rate':round(fp_rate,4)})
-    feasible=[s for s in sweep if s['flagship_recall']>=.75 and s['flagship_fp_rate']<=.10]
+        sweep.append({'tau':tau,'macro_f1':round(pc['macro_f1'],4) if pc['macro_f1'] is not None else None,'flagship_recall':round(pc['flagship']['recall'],4) if pc['flagship']['recall'] is not None else None,'flagship_fp_rate':round(fp_rate,4)})
+    feasible=[s for s in sweep if s['flagship_recall'] is not None and s['flagship_recall']>=.75 and s['flagship_fp_rate']<=.10]
     tau_infeasible=not feasible
     if tau_infeasible:
         # Honest degradation instead of a hard exit: keep the report flowing, flag
         # the miss, and prefer the highest macro-F1 with recall>=0.6 & FP<=0.15.
-        relaxed=[s for s in sweep if s['flagship_recall']>=.6 and s['flagship_fp_rate']<=.15] or sweep
-        chosen=max(relaxed,key=lambda s:s['macro_f1'])
+        relaxed=[s for s in sweep if s['flagship_recall'] is not None and s['flagship_recall']>=.6 and s['flagship_fp_rate']<=.15] or sweep
+        chosen=max(relaxed,key=lambda s:s['macro_f1'] if s['macro_f1'] is not None else -1)
         print('TAU GATE MISSED: no point satisfies recall>=0.75 & FP<=0.10; relaxed pick',json.dumps(chosen),flush=True)
     else:
         chosen=max(feasible,key=lambda s:s['macro_f1'])
@@ -689,6 +847,7 @@ def run(args):
     if (tuned_metrics['flagship_underroute_rate'] or 0)>.05:gate_reasons.append('Flagship under-routing exceeds 5%.')
     if (tuned_metrics['vision_false_negative_rate'] or 0)>.05:gate_reasons.append('Vision false-negative rate exceeds 5%.')
     report={'run':args.run,'seed':args.seed,'base_model':json.loads((ROOT/'model-manifest.json').read_text()),'training':{'epochs':args.epochs,'rank':args.rank,'lr':effective_lr,'accumulation':args.accumulation,'trainable_parameters':trainable,'optimizer_updates':updates,'seconds':time.perf_counter()-start,'history':history},'effective_config':effective,'evaluation_basis':'agreement with fresh expert prompt-only labels; NOT real generation task success','baseline':baseline_metrics,'finetuned':tuned_metrics,'baseline_temperatures':baseline_temps,'baseline_calibration_notes':baseline_temp_notes,'temperatures':temps,'calibration_notes':temp_notes,'logit_adjustment':{'sweep':sweep,'chosen':chosen},'tier_class_weights':weights,'vision_class_weights':vision_weights,'quality_gate':{'passed':False,'mode':'shadow','reasons':gate_reasons},'split_report':json.loads((ROOT/'data/split-report.json').read_text())}
+    report['quality_gate']=apply_ece_veto(report['quality_gate'],tuned_metrics,max_tier_ece)
     (output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
     (output/'calibration.json').write_text(json.dumps({'temperatures':temps,'tier_adjust':tier_adjust,'tier_adjust_tau':chosen['tau'],'tier_prior':tier_prior,'notes':temp_notes},ensure_ascii=False,indent=2)+'\n')
     (output/'quality-gate.json').write_text(json.dumps(report['quality_gate'],ensure_ascii=False,indent=2)+'\n')
@@ -696,6 +855,7 @@ def run(args):
 
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--run',default='real-history-v1');p.add_argument('--epochs',type=int,default=6);p.add_argument('--rank',type=int,default=8);p.add_argument('--lr',type=float,default=1e-4,help='LoRA initial learning rate; IGNORED under --fullft, which fixes the initial LR at 2e-6 (official recipe — effective_config records effective vs requested)');p.add_argument('--accumulation',type=int,default=8);p.add_argument('--seed',type=int,default=20261010);p.add_argument('--synth',action='store_true',help='merge data/synth/*.jsonl into train/calibration');p.add_argument('--beta',type=float,default=.999);p.add_argument('--mlp',action='store_true',help='extend LoRA to MLP and all attention output/input projections (deeper modification)');p.add_argument('--fullft',action='store_true',help='full fine-tune of the language backbone (deepest modification; vision tower stays frozen via LoRA-free path). LR schedule (issue #14): 3%% warmup + cosine over the OVERSAMPLED optimizer-update count (tail batch ceil), progress clamped to [0,1], decay floor at 10%% of the initial LR (2e-7; the archived v3c used a 1e-3 multiplier floor)');p.add_argument('--label-smoothing',type=float,default=.05);p.add_argument('--swa',action='store_true',help='average the 3 best epochs by selection macro-F1 (model soup guardrail; strict top-3 pool with eviction — issue #14)');p.add_argument('--smoke',action='store_true',help='short pipeline validation run: legacy = 24 train rows, 6+6 calibration rows, 1 epoch; grouped = 24 train rows + whole-group calibration sub-pool, 1 epoch (support gates never relaxed)')
+    p.add_argument('--max-tier-ece',type=float,default=None,help='Pre-register an optional maximum tier ECE in [0,1]; extra veto only, never passes the quality gate; no default threshold')
     p.add_argument('--legacy-calibration',action='store_true',help='reproduce the archived v3c row-split calibration exactly (issue #2: explicit legacy; new runs default to group-isolated calibration)')
     p.add_argument('--optimizer',default='adamw',choices=['adamw','adamw8bit'],help='optimizer over trainable params: adamw (default; byte-identical to the archived v3c) or adamw8bit (bitsandbytes 8-bit m/v states — trades exact AdamW moments for ~2.8GiB VRAM on this 16GB GPU; requires the RUNTIME-side bitsandbytes install and exits loudly when missing, never silently falls back). LR semantics identical: fullft fixes the initial LR at 2e-6 under both')
     p.add_argument('--calibration-roles',default=None,help='JSON file with pre-registered A/B/C role groups (+ optional support_policy/protocol); required for new runs')

@@ -37,7 +37,10 @@ The interesting engineering here is not the model — it is everything around it
 
 | Metric | v3c |
 |---|---:|
-| tier macro-F1 | 0.805 |
+| tier accuracy | 0.721 |
+| tier macro-F1 (fixed 3 classes) | 0.805 |
+| tier NLL / Brier | 1.488 / 0.678 |
+| tier ECE (archived pre-fix implementation) | 0.408 |
 | flagship recall / precision | 0.933 / 0.509 |
 | vision recall / precision | 0.959 / 0.887 |
 | test contexts truncated | 0 |
@@ -45,6 +48,60 @@ The interesting engineering here is not the model — it is everything around it
 The quality gate is **not passed** (no independent task-success benchmark yet;
 flagship over-promotion remains). See the archived `artifacts/real-history-v3c/report.json`
 in a full local checkout and the honest-limitations notes below.
+
+## Evaluation metrics and limits (issue #3)
+
+New reports (`metric_definition_version: 2`) show **accuracy, fixed-class macro-F1,
+NLL, multiclass Brier, five-bin ECE, and the true × predicted confusion matrix**
+together for tier, vision, and task_type. Each `*_per_class` entry has precision,
+recall, F1, true support `support` (n), predicted support, and `low_support` when
+n < 10 (configurable through `metrics(..., low_support_threshold=...)`). A zero
+ratio denominator is `null`; an entirely unevaluated field has `null` scores,
+not zero accuracy/loss. Unknown target labels are counted in `excluded_rows`.
+
+Macro-F1 keeps the historical **fixed schema denominator** (tier 3, vision 2,
+task_type 7), including unsupported classes with zero contribution, and records
+its definition and low-support warning. Undefined per-class F1 is `null` but
+contributes zero to this explicitly named convention; an empty field's macro-F1
+is `null`. There is no silently substituted supported-class average. Never pick
+or qualify a router using macro-F1 or any other single metric alone.
+
+ECE uses disjoint [0,.2), [.2,.4), [.4,.6), [.6,.8), [.8,1] bins. `ece_bins`
+exposes counts, weights, accuracy, confidence, and contributions; every valid
+row enters exactly one bin. The old epsilon upper edge double-counted boundary
+values (all-correct confidence .4 produced 1.2 rather than .6). Frozen v3c
+artifacts and the table above are unchanged historical measurements, not
+recomputed results. New NLL explicitly floors true-label probability at 1e-12;
+Brier sums squared errors over all classes. Invalid/nonfinite probability
+vectors are rejected instead of yielding misleading metrics.
+
+`routing_costs` reports downgrade (true higher → predicted lower) and overroute
+(true lower → predicted higher) counts and weighted losses, plus every tier
+transition. The default is **illustrative ordinal tier distance**: one step
+costs 1, two cost 2, correct decisions cost 0. It is not dollars or measured task
+success. `metrics(..., cost_matrix=...)` accepts a predeclared true × predicted
+nonnegative loss matrix with zero diagonal and records it in the report.
+
+Bootstrap intervals sample whole `split_group` clusters from the full
+field-valid pool, including groups without the target class. Prediction output
+preserves source groups. Missing groups, fewer than two independent groups,
+or fewer than two groups supporting the statistic denominator make the interval
+unavailable (`low`/`high`: `null`, with a reason). Undefined ratio resamples are
+omitted and counted; valid-resample counts, seed, and scope are reported. These
+95% percentile intervals are conditional on nonzero denominators; few groups
+or boundary scores can understate uncertainty, so even a degenerate interval
+is not a production qualification. Row IDs never silently imply independence.
+
+Optionally pre-register `--max-tier-ece <0..1>` before evaluation via
+`scripts/train.py` or `train_eval.py`. The threshold is recorded in
+`effective_config.evaluation_policy` and `quality_gate.calibration_constraint`.
+Exceeding it, or lacking an evaluable score, adds a veto; meeting it never turns
+an unpassed gate into a pass. **No threshold is enabled by default**; 0.25 is only
+an unvalidated proposal. Grouped development still does not open test data and
+cannot assess this independent-evaluation constraint. Candidate task-success
+evidence remains required (#26); frozen-v1/private prediction verification is
+external acceptance (#27). Synthetic CPU tests establish metric behavior, not
+real model improvement or production readiness.
 
 ## Repository layout
 
