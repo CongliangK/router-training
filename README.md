@@ -253,7 +253,9 @@ dual thresholds using nested LOGO; every outer group's labels are excluded from
 all selection, and inner validation groups fit neither T nor thresholds.
 [tau_ablation.py](scripts/tau_ablation.py) scans tau=0/0.5/1/1.5/2 at fixed,
 predeclared T, requiring a bound train prior and explicit versioned relative-cost
-table, with paired group uncertainty and support-aware conclusions. Inadequate
+table, with paired group uncertainty and support-aware conclusions. Route-cost
+means use exact counts/rational weights and one final binary64 rounding, preserving
+finite positive small/subnormal spend even with a huge unused route. Inadequate
 support/infeasible constraints fail closed; no same-pool fitted evaluation,
 relaxed fallback, test selection, or serving product is produced.
 

@@ -1,9 +1,11 @@
 """Issues #1/#22: invented logits only; no models loaded or private IO."""
 import copy
+from fractions import Fraction
 import itertools
 import json
 import math
 from pathlib import Path
+import random
 import subprocess
 import sys
 import tempfile
@@ -432,6 +434,89 @@ class TauTests(unittest.TestCase):
             with self.assertRaises(PlanError):oc.validate_tau_protocol(p)
 
 
+class CostMeanTests(unittest.TestCase):
+    """Exact input-number oracle; no epsilon, intermediate scale or float weights."""
+    def rows(self, groups):
+        return [{'label': tier, 'split_group': str(g), 'prediction': tier,
+                 'probabilities': [float(c == tier) for c in TIERS]}
+                for g, tiers in enumerate(groups) for tier in tiers]
+
+    def oracle(self, rows, table):
+        values = [Fraction(table[r['prediction']]) for r in rows]
+        groups = {r['split_group'] for r in rows}
+        row_mean = sum(values) / len(values)
+        group_mean = sum(sum(Fraction(table[r['prediction']]) for r in rows if r['split_group'] == g)
+                         / sum(r['split_group'] == g for r in rows) for g in groups) / len(groups)
+        return float(row_mean), float(group_mean)
+
+    def check_means(self, groups, table):
+        rows = self.rows(groups)
+        c = costs();c['relative_cost_by_predicted_tier'] = table
+        actual = oc.summarize(rows, validate_costs(c))
+        expected = self.oracle(rows, table)
+        self.assertEqual((actual['mean_relative_cost'], actual['group_equal']['mean_relative_cost']), expected)
+        self.assertTrue(all(math.isfinite(v) and v > 0 for v in expected))
+        return actual
+
+    def test_unused_huge_route_cannot_erase_positive_spend(self):
+        m = self.check_means([['fast']*9, ['flagship']],
+                             {'fast': 1e-100, 'balanced': 1e308, 'flagship': 1e-100})
+        self.assertEqual(m['mean_relative_cost'], 1e-100)
+        self.assertEqual(m['group_equal']['mean_relative_cost'], 1e-100)
+
+    def test_selected_huge_mixed_costs_and_max_float_do_not_overflow(self):
+        for high in (1e308, sys.float_info.max, 10**308, 2**53+1):
+            for groups in ([['fast']*9, ['balanced', 'flagship']], [['fast']*7, ['fast']*3]):
+                with self.subTest(high=high, groups=groups):
+                    self.check_means(groups, {'fast': high, 'balanced': 1e-100,
+                                              'flagship': math.ulp(0.)})
+
+    def test_small_and_subnormal_means_round_only_once(self):
+        tiny = math.ulp(0.)
+        for low, high in [(1e-310, 1e-309), (tiny, tiny), (tiny, 2*tiny),
+                          (tiny, 9*tiny), (sys.float_info.min, tiny)]:
+            for groups in ([['fast']*9, ['flagship']], [['fast', 'flagship'], ['flagship']*7]):
+                with self.subTest(low=low, high=high, groups=groups):
+                    self.check_means(groups, {'fast': low, 'balanced': 1e308, 'flagship': high})
+
+    def test_equal_group_cost_ignores_within_group_replication(self):
+        for unit in (math.ulp(0.), 1e-100, 1.):
+            table = {'fast': unit, 'balanced': 1e308, 'flagship': 9*unit}
+            a = self.check_means([['fast'], ['flagship']], table)
+            b = self.check_means([['fast']*9, ['flagship']], table)
+            self.assertNotEqual(a['mean_relative_cost'], b['mean_relative_cost'])
+            self.assertEqual(a['group_equal']['mean_relative_cost'], b['group_equal']['mean_relative_cost'])
+            # Distinct draw identities count a duplicated cluster twice.
+            c = self.check_means([['fast']*9, ['flagship'], ['flagship']], table)
+            self.assertNotEqual(b['group_equal']['mean_relative_cost'], c['group_equal']['mean_relative_cost'])
+
+    def test_bootstrap_cost_statistic_matches_exact_group_draw_oracle(self):
+        table = {'fast': math.ulp(0.), 'balanced': 1e308, 'flagship': 9*math.ulp(0.)}
+        left = self.rows([['fast']*9, ['flagship'], ['fast', 'flagship'], ['flagship']*3])
+        right = [{**r, 'prediction': 'fast'} for r in left]
+        p = tau_protocol()
+        with mock.patch.object(oc, 'supported', return_value=True):
+            actual = oc.paired_group_interval(left, right, p,
+                      lambda rs:oc.summarize(rs, table)['group_equal']['mean_relative_cost'])
+        rng = random.Random(p['bootstrap_seed']);groups = sorted({r['split_group'] for r in left})
+        deltas = []
+        for _ in range(p['bootstrap_samples']):
+            draw = [rng.choice(groups) for _ in groups]
+            samples = [[{**r, 'split_group': str(i)} for i, g in enumerate(draw)
+                        for r in rows if r['split_group'] == g] for rows in (left, right)]
+            deltas.append(self.oracle(samples[0], table)[1] - self.oracle(samples[1], table)[1])
+        deltas.sort()
+        self.assertEqual(actual['estimate'], self.oracle(left, table)[1]-self.oracle(right, table)[1])
+        self.assertEqual(actual['low'], deltas[2]);self.assertEqual(actual['high'], deltas[97])
+        self.assertEqual(actual['valid_resamples'], 100)
+        self.assertGreater(actual['high'], 0.)
+
+    def test_invalid_nonrepresentable_means_fail_closed_not_zero(self):
+        for bad in (float('inf'), float('nan'), 10**400, 0., -1.):
+            with self.subTest(bad=bad), self.assertRaises(PlanError):
+                oc.summarize(self.rows([['fast']]), dict.fromkeys(TIERS, bad))
+
+
 class CliTests(unittest.TestCase):
     def run_cli(self, script, args):
         return subprocess.run([sys.executable, str(ROOT/'scripts'/script), *args], capture_output=True, text=True)
@@ -471,6 +556,45 @@ class CliTests(unittest.TestCase):
             result = self.run_cli('wise_ft_calibrate.py', args)
             self.assertEqual(result.returncode, 1)
             self.assertNotIn(str(root), result.stdout)
+
+    def test_tau_cli_positive_finite_extreme_cost_means_stdlib_only(self):
+        tiny = math.ulp(0.)
+        tables = [{'fast': 1e-100, 'balanced': 1e308, 'flagship': 1e-100},
+                  {'fast': 1e308, 'balanced': tiny, 'flagship': 1e-100},
+                  {'fast': tiny, 'balanced': 1e308, 'flagship': 9*tiny},
+                  dict.fromkeys(TIERS, sys.float_info.max)]
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d);s = source(4)
+            # An unused balanced route must not affect spend. Unequal groups
+            # distinguish row weighting from equal-group weighting.
+            for r in s['rows']:
+                if r['label'] == 'balanced':r['logits'] = [4., -3., -3.]
+            s['rows'].append({**s['rows'][0], 'id': s['rows'][0]['id']+'-duplicate'})
+            p = prior(s);p['probabilities'] = [1/3]*3
+            for name, obj in [('source', s), ('prior', p), ('protocol', tau_protocol())]:
+                (root/f'{name}.json').write_text(json.dumps(obj))
+            for index, table in enumerate(tables):
+                with self.subTest(table=table):
+                    c = costs();c['relative_cost_by_predicted_tier'] = table
+                    cost_path = root/f'costs-{index}.json';cost_path.write_text(json.dumps(c))
+                    output = root/f'output-{index}.json'
+                    args = ['--logits', str(root/'source.json'), '--prior', str(root/'prior.json'),
+                            '--protocol', str(root/'protocol.json'), '--costs', str(cost_path), '--output', str(output)]
+                    result = subprocess.run([sys.executable, '-S', str(ROOT/'scripts/tau_ablation.py'), *args],
+                                            capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+                    report = json.loads(output.read_text())
+                    # Independent route-count oracle, not implementation's helper.
+                    row_mean = float((9*Fraction(table['fast'])+4*Fraction(table['flagship']))/13)
+                    group_mean = float((11*Fraction(table['fast'])+5*Fraction(table['flagship']))/16)
+                    for candidate in report['candidates']:
+                        self.assertTrue(candidate['selection_feasible'])
+                        self.assertEqual(candidate['metrics']['mean_relative_cost'], row_mean)
+                        self.assertEqual(candidate['metrics']['group_equal']['mean_relative_cost'], group_mean)
+                    interval = report['comparison']['intervals']['mean_relative_cost']
+                    self.assertEqual(interval['status'], 'available')
+                    self.assertEqual((interval['estimate'], interval['low'], interval['high']), (0., 0., 0.))
+                    self.assertEqual(interval['valid_resamples'], 100)
 
     def test_cli_imports_no_torch_or_model_backend(self):
         result = subprocess.run([sys.executable, '-c',

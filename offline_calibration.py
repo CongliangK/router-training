@@ -6,6 +6,7 @@ risk guarantees. The existing A/B/C training calibration remains unchanged.
 """
 from __future__ import annotations
 import collections
+from fractions import Fraction
 import math
 import random
 from calibration_groups import PlanError, fit_temperature
@@ -186,6 +187,37 @@ def predict(rows, temperature, thresholds=None):
     return output
 
 
+def _cost_means(rows, costs):
+    """Exact selected-route spend, rounded once per mean to binary64.
+
+    Scaling by an unused huge route erased representable positive spend (red
+    team F1). Even selected-cost scaling/float weights can round subnormal terms
+    to zero. Count routes with integers and retain rational group means until
+    the final conversion: floats mean their exact binary values, ints are exact.
+    The bounded CPU protocol has only three routes; no per-row Fraction is needed.
+    """
+    groups = collections.defaultdict(collections.Counter)
+    for row in rows:
+        groups[row['split_group']][row['prediction']] += 1
+    selected = {tier for counts in groups.values() for tier in counts}
+    if not all(number(costs[c]) and costs[c] > 0 for c in selected):
+        raise PlanError('relative route costs must be finite positive nonboolean numbers')
+    exact_costs = {c: Fraction(costs[c]) for c in selected}
+    totals = [(sum(exact_costs[c]*n for c, n in counts.items()), sum(counts.values()))
+              for counts in groups.values()]
+    means = (sum(total for total, _ in totals) / len(rows),
+             sum(total / n for total, n in totals) / len(groups))
+    try:
+        result = tuple(float(mean) for mean in means)
+    except OverflowError:
+        raise PlanError('relative cost means are not finite representable numbers') from None
+    # Valid finite positive costs form convex means, including subnormals.
+    # Do not clamp, add epsilon or silently certify zero on an arithmetic failure.
+    if not all(math.isfinite(mean) and mean > 0 for mean in result):
+        raise PlanError('relative cost means are not positive finite representable numbers')
+    return result
+
+
 def summarize(rows, costs=None):
     """Tier-only adapter reusing shared v2 class and calibration-bin metrics.
 
@@ -201,10 +233,7 @@ def summarize(rows, costs=None):
     matrix = [[0] * 3 for _ in TIERS]
     weighted = [[0.] * 3 for _ in TIERS]
     nll = brier = gnll = 0.
-    # Normalize positive cost units before summing: finite per-route inputs
-    # must not overflow merely because several rows share a large unit scale.
-    cost_scale = max(costs.values()) if costs else None
-    group_cost_terms = []
+    row_cost, group_cost = _cost_means(rows, costs) if costs else (None, None)
     metric_rows = [{'label': {'tier': r['label']},
                     'answers': {'tier': {'choice': r['prediction'],
                                         'confidence': r['probabilities'][TIERS.index(r['prediction'])]}}}
@@ -220,8 +249,6 @@ def summarize(rows, costs=None):
         nll += loss
         gnll += weight * loss
         brier += sum((v - (i == true))**2 for i, v in enumerate(p))
-        if costs:
-            group_cost_terms.append(weight * (costs[row['prediction']] / cost_scale))
     n = len(rows)
     return {'metric_definition': 'tier-v2; fixed 3-class macro-F1; NLL floor 1e-12; Brier sum; decision-confidence ECE',
             'metric_definition_version': 2, 'nll_probability_floor': 1e-12,
@@ -232,9 +259,9 @@ def summarize(rows, costs=None):
             'nll': nll / n, 'brier': brier / n,
             'ece_5_bins': sum(b['contribution'] for b in bins),
             'ece_bin_counts': [b['count'] for b in bins],
-            'mean_relative_cost': cost_scale * min(1., math.fsum(costs[r['prediction']] / cost_scale for r in rows) / n) if costs else None,
+            'mean_relative_cost': row_cost,
             'group_equal': {'nll': gnll, 'error': max(0., 1 - sum(weighted[i][i] for i in range(3))),
-                            'mean_relative_cost': cost_scale * min(1., math.fsum(group_cost_terms)) if costs else None, **_rates(weighted)}}
+                            'mean_relative_cost': group_cost, **_rates(weighted)}}
 
 
 def _fit(rows, protocol):

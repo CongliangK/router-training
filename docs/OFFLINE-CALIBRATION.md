@@ -2,8 +2,8 @@
 
 **Tooling, not real evaluation or issue closure.** No private inputs, weights,
 models, training (including smoke), GPU, network, or frozen-test replay were used
-for this implementation. Only invented fixtures are tested. Existing training,
-A/B/C calibration, serving, policy, preparation and frozen runs are unchanged.
+for this implementation. Only invented fixtures are tested. These tools do not
+modify training, A/B/C calibration, serving, policy, preparation or frozen runs.
 
 - [#22](https://github.com/CongliangK/router-training/issues/22):
   [wise_ft_calibrate.py](../scripts/wise_ft_calibrate.py) performs a **logit
@@ -192,6 +192,19 @@ hyphen). All costs must be positive finite nonboolean numbers. This is simulated
 actual billing, policy-adjusted routes, or measured task success. No costs are
 inferred from the capability/identity route table. A changed table changes the
 binding and requires a new declared analysis.
+
+Cost means count only actually predicted routes. Integer costs are exact; parsed
+floating costs mean their exact binary values (not ideal decimal literals).
+Route counts and row/group weights are rational until each final mean is rounded
+once to binary64, nearest with ties to even. Group-equal cost is the mean of exact
+within-group means, not an average of already rounded group scores. This avoids
+both intermediate sum overflow and loss of positive small/subnormal spend from
+scaling by a huge unused route. No epsilon, zero substitution, cost-table range
+restriction or clipping is used; nonfinite/nonrepresentable arithmetic fails
+closed. Bootstrap samples use this same calculation and distinct cluster-draw
+identities; paired deltas subtract the reported binary64 means as before (a zero
+difference does not mean zero spend). Other metrics and selection rules are
+unchanged.
 
 Example explicit tau protocol (again provisional):
 
