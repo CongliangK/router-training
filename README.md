@@ -143,6 +143,40 @@ evidence remains required (#26); frozen-v1/private prediction verification is
 external acceptance (#27). Synthetic CPU tests establish metric behavior, not
 real model improvement or production readiness.
 
+## Opt-in research training development (#19 / #20 / #5)
+
+`--research-config configs/research-v1.json` on `scripts/train.py` selects a new,
+versioned candidate recipe; it never changes the frozen v3c/default path.
+Grouped-only structural `--dry-run` validates synthetic fixtures without a model;
+research mode refuses `--legacy`, `--recipe` and `--smoke`. The example budget and
+data/protocol names are unapproved development placeholders, not training approval.
+
+Candidate mechanics: sqrt-group budgeted sampling and explicit prior/probability
+provenance, additive **training** logit adjustment, versioned asymmetric expected
+regret and head coefficients, expert-only confidence, no-decay groups; DoRA
+r16/alpha32/dropout .05 with fail-closed runtime enumeration/injection checks,
+train-only NEFTune, and a separate top4→full staged AdamW8bit control. Actual
+pinned-backbone support/weights, smoke/training, memory and quality are **unverified**;
+weight interpolation is explicitly unavailable, not substituted by SWA/logit mixing.
+
+Task-type-zero / .3 / literal tier-only ablations are configurable. Independent-head
+two-stage training remains a protocol, not a fake independent LM head. task_type
+remains diagnostic-only, not a production route selector. No causal creative-collapse
+or auxiliary-benefit claim is made. All three issues remain **OPEN**. See the
+[complete API, numerical rationale, matched experiment protocol and blocked acceptance
+ledger](<research/training-paths-v1.md>). The locally integrated #18 task-schema
+candidate still requires independent approval and upstream merge before publication.
+Research config remains **legacy7-v1 only**: default/explicit `--label-schema router-label-v1`
+selects the same seven questions; `router-label-v2` research is **unsupported** and
+refused before config/data/sampler/model/output work. Non-research v2 keeps its
+separate six-question, fingerprinted opt-in path. Source provenance integer
+`label_schema_version: 1` is distinct from semantic string
+`task_label_schema_version: "router-label-v1"` (or v2). Measured shadow rows never
+supply research supervision or confidence weights; old unversioned checkpoints
+retain legacy seven-question meaning. Final integration must also absorb compatible
+later policy/server changes and receive fresh red-team review; prior source reviews
+are not approval of this combined tree.
+
 ## CPU research protocols (Refs #21, Refs #26 — both remain open)
 
 New [OOF/CRC/soup contracts](oof_protocol.py) and [cascade protocol](cascade_protocol.py)

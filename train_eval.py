@@ -375,6 +375,11 @@ def run(args):
     # archived row-split calibration is reachable only through the explicit
     # --legacy-calibration flag. No new run may silently fall back to legacy.
     selected=version(getattr(args,'label_schema',None));questions=questions_for(selected,QUESTIONS)
+    research=None;research_streams=None;research_plan=None;capacity_report=None;stage_eligible=None;noise_handle=None
+    if getattr(args,'research_config',None):
+        import research_training as rt
+        rt.check_task_schema(selected)
+        research=rt.load_config(args.research_config);rt.check_args(research,args);rt.check_questions(questions)
     if selected==V2 and getattr(args,'legacy_calibration',False):
         raise SystemExit('v2 labels cannot use archived legacy calibration')
     if selected==V2 and args.synth:
@@ -415,6 +420,8 @@ def run(args):
         # support every tier class, or the run fails before it starts.
         from calibration_groups import compute_prior
         prior=compute_prior(real_train_rows,'tier',grouped_schema(selected))
+        if research:
+            research_streams,research_plan=rt.sample_epochs(datasets['train'],research,args.seed,args.epochs)
         if args.structural_dry_run:
             from calibration_groups import anonymous_summary
             print('STRUCTURAL DRY RUN (no model, no artifacts, no test access)',json.dumps(anonymous_summary(plan),ensure_ascii=False),flush=True)
@@ -483,8 +490,13 @@ def run(args):
     targets=['q_proj','v_proj','in_proj_qkv','in_proj_z']
     if args.mlp:targets=targets+['o_proj','out_proj','in_proj_a','in_proj_b','gate_proj','up_proj','down_proj']
     lora=LoraConfig(r=args.rank,lora_alpha=args.rank*2,lora_dropout=.05,target_modules=targets,bias='none')
+    if research and research['capacity']['mode']=='dora':
+        from research_capacity import dora_config,verify_dora_injection
+        lora,capacity_report=dora_config(engine.backend.model,LoraConfig)
     if not args.fullft:
         engine.backend.model=get_peft_model(engine.backend.model,lora)
+        if research and research['capacity']['mode']=='dora':
+            capacity_report=verify_dora_injection(engine.backend.model,capacity_report)
     else:
         # Deepest modification: unfreeze the language backbone entirely, keep the
         # vision tower and projector frozen (the official Intern-Decision recipe).
@@ -517,13 +529,28 @@ def run(args):
     # and the scheduler counts its updates from them, so the LR plan can never
     # again be estimated from the raw pre-oversampling length.
     raw_train_rows=len(datasets['train'])
-    epoch_train_rows=[oversample_epoch_rows(datasets['train']) for _ in range(args.epochs)]
+    epoch_train_rows=research_streams if research else [oversample_epoch_rows(datasets['train']) for _ in range(args.epochs)]
     epoch_row_counts=[len(rows) for rows in epoch_train_rows]
     planned_updates=sum(optimizer_updates(n,args.accumulation) for n in epoch_row_counts)
     effective_lr=effective_initial_lr(args)
     # Official XTuner recipe (configs/training/qwen35.py): lr 2e-6, cosine decay
     # to 2e-7, warmup 3%, wd 0.01. Our fullft path follows it; LoRA paths keep lr 1e-4.
-    optimizer=build_optimizer(getattr(args,'optimizer','adamw'),(p for p in model.parameters() if p.requires_grad),effective_lr)
+    if research:
+        from research_capacity import staged_parameters,apply_stage,install_neftune
+        eligible_ids=None
+        if research['capacity']['mode']=='staged8bit':
+            stage_eligible,top_layers=staged_parameters(model)
+            eligible_ids={id(p) for _,p in stage_eligible}
+            for p in model.parameters():p.requires_grad=False
+            capacity_report=apply_stage(stage_eligible,top_layers,0,planned_updates)
+            capacity_report['eventual_trainable_parameters']=sum(p.numel() for _,p in stage_eligible)
+            capacity_report['observed_transitions']=[]
+            trainable=sum(p.numel() for p in model.parameters() if p.requires_grad)
+        optimizer_params,optimizer_groups_report=rt.parameter_groups(model.named_parameters(),eligible_ids)
+        if research['capacity']['neftune_alpha']:
+            noise_handle=install_neftune(model,research['capacity']['neftune_alpha'])
+    else:optimizer_params=(p for p in model.parameters() if p.requires_grad)
+    optimizer=build_optimizer(getattr(args,'optimizer','adamw'),optimizer_params,effective_lr)
     scheduler=None;scheduler_report={'type':'constant (no scheduler)','note':'LoRA paths keep the optimizer LR fixed'}
     if args.fullft:
         total_steps,warmup,scheduler_report=fullft_scheduler_plan(planned_updates,effective_lr)
@@ -540,8 +567,13 @@ def run(args):
     # (red-team finding). Tier loss weights stay 1.0; vision keeps effective-number
     # weights because sampling does not balance the vision field.
     weights={tier:1.0 for tier in TIERS}
-    vision_weights={choice:(1-beta)/(1-beta**max(vision_counts.get(choice,0),1)) for choice in questions['vision']['criteria']}
-    vscale=2/sum(vision_weights.values());vision_weights={c:round(w*vscale,4) for c,w in vision_weights.items()}
+    if research:
+        # Do not even construct legacy multipliers on the research path.
+        vision_weights={choice:1. for choice in questions['vision']['criteria']}
+        scheduler_report.update(total_optimizer_updates=planned_updates,counting_basis='actual configured sqrt-group sampled rows; per-epoch tail ceil')
+    else:
+        vision_weights={choice:(1-beta)/(1-beta**max(vision_counts.get(choice,0),1)) for choice in questions['vision']['criteria']}
+        vscale=2/sum(vision_weights.values());vision_weights={c:round(w*vscale,4) for c,w in vision_weights.items()}
     print('tier weights',weights,'vision weights',vision_weights,flush=True)
     history=[];best_score=-1;start=time.perf_counter();updates=0;swa_pool=[]
     for epoch in range(args.epochs):
@@ -550,18 +582,30 @@ def run(args):
         rows=epoch_train_rows[epoch]
         model.train();optimizer.zero_grad();running=0
         for i,row in enumerate(rows):
+            if stage_eligible is not None:
+                stage_state=apply_stage(stage_eligible,top_layers,updates,planned_updates)
+                transitions=capacity_report['observed_transitions']
+                if not transitions or transitions[-1]['phase']!=stage_state['phase']:
+                    transitions.append({'phase':stage_state['phase'],'completed_optimizer_updates':updates})
             request,truncated=request_for(engine,row['prompt'],schema_version=selected)
             with torch.autocast('cuda',dtype=torch.bfloat16,enabled=args.fullft):
                 logits,_=field_logits(engine,request,train=True)
-            loss=0
-            for field,coefficient in [('tier',1.),('vision',.7),('task_type',.3)]:
-                expected=target(row,field);labels=list(questions[field]['criteria'])
-                if expected not in labels:continue
-                field_loss=F.cross_entropy(logits[field].unsqueeze(0),torch.tensor([labels.index(expected)],device=logits[field].device),label_smoothing=args.label_smoothing)
-                if field=='tier':field_loss=field_loss*weights[expected]
-                if field=='vision':field_loss=field_loss*vision_weights[expected]
-                loss=loss+coefficient*field_loss
-            (loss/args.accumulation).backward();running+=loss.detach().item()
+            if research:
+                loss=rt.row_loss(logits,row,questions,research,research_plan,args.label_smoothing)
+                # Research tails are means over the actual accumulated rows;
+                # legacy scaling remains untouched for reproduction.
+                divisor=min(args.accumulation,len(rows)-(i//args.accumulation)*args.accumulation)
+            else:
+                loss=0
+                for field,coefficient in [('tier',1.),('vision',.7),('task_type',.3)]:
+                    expected=target(row,field);labels=list(questions[field]['criteria'])
+                    if expected not in labels:continue
+                    field_loss=F.cross_entropy(logits[field].unsqueeze(0),torch.tensor([labels.index(expected)],device=logits[field].device),label_smoothing=args.label_smoothing)
+                    if field=='tier':field_loss=field_loss*weights[expected]
+                    if field=='vision':field_loss=field_loss*vision_weights[expected]
+                    loss=loss+coefficient*field_loss
+                divisor=args.accumulation
+            (loss/divisor).backward();running+=loss.detach().item()
             if (i+1)%args.accumulation==0 or i+1==len(rows):
                 torch.nn.utils.clip_grad_norm_((p for p in model.parameters() if p.requires_grad),1.)
                 optimizer.step();optimizer.zero_grad();updates+=1
@@ -594,6 +638,7 @@ def run(args):
     # Issue #14 invariant: the scheduler was built from planned_updates; if the
     # loop's real stepping ever diverges from the counting formula, fail loudly
     # instead of silently mis-scheduling every future run.
+    if noise_handle is not None:noise_handle.remove()
     if updates!=planned_updates:raise AssertionError(f'optimizer update drift: planned {planned_updates}, executed {updates}')
     # Model soup: average the pooled epoch states, then keep whichever wins on
     # the selection half (soup vs single best epoch). Same split, honest comparison.
@@ -633,6 +678,14 @@ def run(args):
     # (effective LR, oversampled per-epoch update counts, scheduler shape,
     # final SWA pool members) — recorded separately from raw CLI input.
     effective=effective_config(args,raw_train_rows,epoch_row_counts,scheduler_report,swa_pool)
+    if research:
+        effective['research']={'config':research,'config_sha256':rt.config_hash(research),'sampler':research_plan,
+                               'head_weights':rt.head_weights(research),'capacity':capacity_report,
+                               'neftune':{'alpha':research['capacity']['neftune_alpha'],'train_only':True},
+                               'weight_interpolation':'unavailable; separate candidate, not SWA/logit mixing',
+                               'deployment_note':'task_type diagnostic only; unvalidated research, no production qualification'}
+        effective['train_rows']={'raw_pool':raw_train_rows,'sampled_per_epoch':epoch_row_counts,'oversampling':False}
+        effective['optimizer'].update(parameter_groups=optimizer_groups_report)
     effective['label_schema']=metadata(selected)
     effective['supplemental_rows']=len(additions)
     effective['evaluation_policy']={'max_tier_ece':max_tier_ece,'metric_definition_version':2}
@@ -740,6 +793,7 @@ if __name__=='__main__':
     p.add_argument('--optimizer',default='adamw',choices=['adamw','adamw8bit'],help='optimizer over trainable params: adamw (default; byte-identical to the archived v3c) or adamw8bit (bitsandbytes 8-bit m/v states — trades exact AdamW moments for ~2.8GiB VRAM on this 16GB GPU; requires the RUNTIME-side bitsandbytes install and exits loudly when missing, never silently falls back). LR semantics identical: fullft fixes the initial LR at 2e-6 under both')
     p.add_argument('--calibration-roles',default=None,help='JSON file with pre-registered A/B/C role groups (+ optional support_policy/protocol); required for new runs')
     p.add_argument('--structural-dry-run',action='store_true',help='grouped runs: run the CPU structural preflight (no model, no artifacts, no test access) and exit')
+    p.add_argument('--research-config',default=None,help='Explicit versioned research recipe (#19/#20/#5), grouped only; CLI recipe must match exactly; not validated on actual backbone')
     args=p.parse_args()
     if not args.run.replace('-','').replace('_','').isalnum():raise SystemExit('Invalid run name')
     run(args)

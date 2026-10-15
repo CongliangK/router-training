@@ -1,0 +1,43 @@
+{
+  "version": "research-training-v1",
+  "schema_version": "legacy7-v1",
+  "data_version": "synthetic-development-only-v1",
+  "evaluation_protocol": "unapproved-development-v1",
+  "training": {
+    "epochs": 2,
+    "rank": 16,
+    "lr": 0.0001,
+    "accumulation": 8,
+    "seed": 20261010,
+    "beta": 0.999,
+    "label_smoothing": 0.05,
+    "synth": false,
+    "mlp": false,
+    "fullft": false,
+    "swa": false,
+    "optimizer": "adamw"
+  },
+  "sampler": {
+    "version": "sqrt-group-v1",
+    "epoch_rows": 256,
+    "synthetic_balanced_vision_multiplier": 1.5,
+    "prior_source": "unique-natural-expert",
+    "prior_smoothing": 1.0
+  },
+  "loss": {
+    "version": "additive-la-v1",
+    "tier_tau": 1.0,
+    "vision_tau": 0.75,
+    "cost_version": "asymmetric-tier-v1",
+    "cost_matrix": [[0.0, 1.0, 3.0], [1.0, 0.0, 1.5], [5.0, 5.0, 0.0]],
+    "cost_lambda": 0.25,
+    "confidence_weighting": true,
+    "head_version": "heads-v1",
+    "auxiliary": "candidate"
+  },
+  "capacity": {
+    "mode": "dora",
+    "neftune_alpha": 5.0,
+    "interpolation": "unavailable"
+  }
+}

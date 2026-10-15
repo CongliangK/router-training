@@ -164,6 +164,8 @@ def main():
                              'configs/v3c.json (e.g. {"lr": 1e-4} or {"optimizer": "adamw8bit"}); deviations '
                              'are echoed and appear in the printed Command. Refused with --legacy, which '
                              'reproduces v3c unchanged')
+    parser.add_argument('--research-config', default=None,
+                        help='Opt-in versioned #19/#20/#5 research config; grouped only, mutually exclusive with --recipe/--smoke; no runtime compatibility claim')
     parser.add_argument('--data-dir', default=str(DEFAULT_DATA_DIR),
                         help='V1: preflight-only; v2: also forwarded to the run (train.jsonl + '
                              'calibration.jsonl; test.jsonl is never read). V1 launches retain the default '
@@ -177,6 +179,7 @@ def main():
     args.data_dir=Path(args.data_dir).resolve()
     if args.roles is not None:args.roles=Path(args.roles).resolve()
     if args.recipe is not None:args.recipe=Path(args.recipe).resolve()
+    if args.research_config is not None:args.research_config=Path(args.research_config).resolve()
     if args.supplemental:args.supplemental=[path.resolve() for path in args.supplemental]
     if args.legacy and args.label_schema!=LEGACY:parser.error('--legacy requires router-label-v1')
     if args.supplemental and args.label_schema!=V2:parser.error('--supplemental requires router-label-v2')
@@ -185,6 +188,19 @@ def main():
     if (ROOT / 'artifacts' / args.run).exists():
         parser.error('Output already exists; choose a new run name')
     data_dir_guard(args, parser)
+    research = None
+    if args.research_config:
+        if args.legacy or args.recipe or args.smoke:
+            parser.error('--research-config refuses --legacy/--recipe/--smoke; archived reproduction stays unchanged')
+        sys.path.insert(0, str(ROOT))
+        import research_training as rt
+        try:
+            rt.check_task_schema(args.label_schema)  # before config/data/sampler/output/model work
+            research = rt.load_config(args.research_config)
+            from calibration_groups import questions_from_source
+            from task_label_schema import questions_for
+            rt.check_questions(questions_for(args.label_schema,questions_from_source()))
+        except (OSError, ValueError, TypeError) as error:parser.error(str(error))
 
     if args.legacy:
         if args.roles:
@@ -215,14 +231,25 @@ def main():
     # plus any explicitly declared --recipe deviations — so a grouped run can
     # never silently train on train_eval.py defaults again.
     recipe, deviations = merged_recipe(json.loads(RECIPE_PATH.read_text()), args.recipe, parser)
+    if research:
+        deviations = {key: {'v3c': recipe.get(key), 'declared': value} for key, value in research['training'].items()}
+        recipe.update(research['training'])
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from validate_calibration import run_validation
     ok, text = run_validation(args.data_dir, roles_path,args.label_schema,args.supplemental)
     print('Structural preflight (CPU, anonymous, no model/artifacts/test):')
     print(text, flush=True)
+    if research:
+        # Same sampler/prior checks as the runtime, no torch/model/test access.
+        try:
+            rows = [json.loads(line) for line in (Path(args.data_dir) / 'train.jsonl').read_text().splitlines() if line.strip()]
+            streams, sampling = rt.sample_epochs(rows, research, recipe['seed'], recipe['epochs'])
+        except (OSError, ValueError, TypeError, KeyError) as error:parser.error(str(error))
+        print('Research preflight (not backbone compatibility):', json.dumps({'config_sha256': rt.config_hash(research), 'sampling': sampling}, sort_keys=True), flush=True)
     command = [sys.executable, str(ROOT / 'train_eval.py'), '--run', args.run,
                '--calibration-roles', str(roles_path)]
     command.extend(recipe_flags(recipe))
+    if research:command.extend(['--research-config', str(args.research_config),'--label-schema',args.label_schema])
     if args.label_schema==V2:
         if recipe['synth']:parser.error('v2 requires explicit --recipe {"synth": false}; legacy synth is incompatible')
         command.extend(['--label-schema',args.label_schema,'--data-dir',str(args.data_dir)])

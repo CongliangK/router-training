@@ -103,6 +103,31 @@ Bootstrap 从完整字段有效样本池按整个 `split_group` 重采样，包�
 这个独立评估约束。真实候选任务成功证据仍由 #26 验收；frozen-v1/私有预测复核属于
 #27 的外部验收。合成 CPU 测试只证明指标行为，不代表真实模型改善或生产就绪。
 
+## 显式 opt-in 训练研究开发（#19 / #20 / #5）
+
+`scripts/train.py --research-config configs/research-v1.json` 选择新的版本化候选，
+不改冻结 v3c 或默认路径。仅 grouped 的 `--dry-run` 可用合成 fixture 做无模型结构校验；
+研究模式拒绝 `--legacy`、`--recipe`、`--smoke`。示例行预算、数据与协议版本是未批准的
+开发占位，不是训练授权。
+
+候选实现包含平方根组预算采样/先验与目标实际概率、**训练加法** logit adjustment、
+完整非对称期望相对代价、专家置信度、版本化头权重、不衰减白名单；DoRA
+r16/alpha32/dropout .05 的运行时 fail-closed 枚举/注入检查、仅训练 NEFTune，
+以及独立的顶层四层→语言骨干分阶段 AdamW8bit 对照。真实固定骨干兼容性、权重、
+smoke/训练、显存及质量均**未验证**；训练后权重插值明确不可用，不用 SWA/logit 混合冒充。
+
+可配置 task_type=0 / .3 与 literal tier-only；独立头两阶段只有明确协议，不伪装共享
+LM 头。task_type 仍只用于诊断，不参与生产路由；没有辅助损失收益或 creative 塌缩的因果
+答案。三项 issue 均保持 **OPEN**。详见[完整 API、数值依据、匹配实验协议和外部验收台账](<research/training-paths-v1.md>)。
+本地集成的 #18 task-schema 候选仍须独立批准并先合入上游，之后才可发布。
+研究配方仍**仅接受 legacy7-v1**：默认/显式 `--label-schema router-label-v1` 使用同样的
+七分类问题；研究模式的 `router-label-v2` **不支持**，在配置/数据读取、采样、模型、输出
+之前拒绝。非研究 v2 保留独立六分类、问题指纹及显式 opt-in 路径。
+来源整数 `label_schema_version: 1` 与语义字符串
+`task_label_schema_version: "router-label-v1"`（或 v2）严格分离；measured 影子行不作
+研究监督或专家置信度权重，旧无版本 checkpoint 仍为七分类。
+父级最终集成还须吸收兼容的后续 policy/server 变更并重新红队审查；原分支 PASS 不是组合树批准。
+
 ## CPU 研究协议（Refs #21、Refs #26；两项均保持开放）
 
 新增 [OOF/CRC/soup 契约](oof_protocol.py) 与 [级联协议](cascade_protocol.py)
