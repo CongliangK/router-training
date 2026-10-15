@@ -135,9 +135,19 @@ def merged_recipe(recipe, overrides_path, parser):
     return merged, deviations
 
 
+def ece_threshold(value):
+    try:threshold=float(value)
+    except ValueError:raise argparse.ArgumentTypeError('max-tier-ece must be a finite number in [0,1]')
+    if not math.isfinite(threshold) or not 0<=threshold<=1:
+        raise argparse.ArgumentTypeError('max-tier-ece must be a finite number in [0,1]')
+    return threshold
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run', required=True, help='New output name; existing runs are refused')
+    parser.add_argument('--max-tier-ece', type=ece_threshold, default=None,
+                        help='Pre-register an optional tier ECE maximum; extra veto only, no default')
     parser.add_argument('--smoke', action='store_true',
                         help='Short GPU pipeline check (legacy: 24 train rows + real test rows; '
                              'grouped: 24 train rows + whole-group calibration sub-pool, gates unchanged)')
@@ -172,6 +182,7 @@ def main():
         recipe = json.loads(RECIPE_PATH.read_text())
         command = [sys.executable, str(ROOT / 'train_eval.py'), '--run', args.run, '--legacy-calibration']
         command.extend(recipe_flags(recipe))
+        if args.max_tier_ece is not None:command.extend(['--max-tier-ece', str(args.max_tier_ece)])
         if args.smoke:
             command.append('--smoke')
         print('Command:', command, flush=True)
@@ -200,6 +211,7 @@ def main():
     command = [sys.executable, str(ROOT / 'train_eval.py'), '--run', args.run,
                '--calibration-roles', str(roles_path)]
     command.extend(recipe_flags(recipe))
+    if args.max_tier_ece is not None:command.extend(['--max-tier-ece', str(args.max_tier_ece)])
     if args.smoke:
         command.append('--smoke')
     if deviations:
