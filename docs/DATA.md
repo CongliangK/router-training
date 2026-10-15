@@ -22,9 +22,10 @@ data/
   synth/*.jsonl             # optional synthetic augmentation (train only)
 ```
 
-and produces `train.jsonl`, `calibration.jsonl`, `test.jsonl`, `expert-labels.jsonl`,
-`split-report.json`. Final splits have already been generated here and are frozen;
-re-running `prepare.py --data <dir>` re-splits from scratch (overwrites outputs).
+The historical/default (`--split-version frozen-v1`) path produces `train.jsonl`,
+`calibration.jsonl`, `test.jsonl`, `expert-labels.jsonl`, `split-report.json`.
+Its algorithm/defaults are unchanged for reproduction; it **overwrites outputs**.
+Never rerun that path on frozen data. New datasets should opt into split-v2 below.
 
 ## Schema: `tasks.jsonl`
 
@@ -66,7 +67,69 @@ Rows need only `prompt`, `description`, `group`, `project`, and an embedded
 Synthetic rows join **train only** — never calibration or test — so temperatures
 and the tau operating point are not fitted on synthetic lexical shortcuts.
 
-## Splitting guarantees (what `prepare.py` enforces)
+## Opt-in split-v2 (CPU development, issue #24)
+
+```sh
+CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void python prepare.py \
+  --split-version split-v2 --data /path/to/new-expert-inputs \
+  --output /path/to/nonexistent-split-v2-bundle --seed 20261010
+```
+
+Both paths must be explicit; the output parent must already exist. The entire
+output directory must be **new** (existing files, directories and symlinks are
+refused). It contains `train.split-v2.jsonl`, `calibration.split-v2.jsonl`,
+`test.split-v2.jsonl`, `expert-labels.split-v2.jsonl` and
+`split-report.split-v2.json`; there is no overwrite switch. Failure to find a
+feasible assignment writes **only** the new versioned diagnostic report and exits
+2; feasible exits 0. I/O/validation errors fail nonzero; an interrupted partial
+bundle is not reusable. Historical files/artifacts are never destinations.
+
+`prepare.prepare_v2(root, output, **options)` is the file API;
+`prepare.split_v2(tasks, labels, seed=20261010, similarity=.88, attempts=12000)`
+returns `(splits_or_None, aggregate_report)` without I/O. Both are also exposed
+by the stdlib-only `split_v2` module. Input expert schemas remain as above (not
+candidate-execution labels); `uncertain` is counted separately, never silently
+relabelled. These APIs do not load models or change training's data paths.
+
+Root `group` plus all cross-root near-duplicate edges form **connected components**,
+including transitive links through different tasks in the same root. Normalized
+(lowercase, whitespace removed) character-5-gram Jaccard ≥.88 links roots; exact
+normalized short prompts also link, but unrelated empty gram sets do not. The
+whole root/component always stays together. Child sessions or >2h windows can
+only be descriptive subgroups; finer isolation requires external provenance
+review and a new protocol. Jaccard <.88 is **not** independence evidence.
+
+Candidates must have three nonempty splits, each with largest component / split
+rows **≤.35**, checked with exact integer arithmetic. This cap is fixed: no
+threshold weakening and no component/root splitting to inflate support. The
+objective adds absolute row-fraction deviations from 70/15/15 (weight 1), tier
+proportion deviations (.15), **vision=yes proportion** deviations (1), and all
+seven task_type proportion deviations (.5), relative to whole-input proportions.
+These are soft targets, not coverage/improvement guarantees. The report gives
+those targets, weights, actual counts/proportions, signed deviations, max share,
+constraint excess, objective terms, and per-class component support (including
+absent/rare classes). A diagnostic candidate is explicitly **not selected**.
+
+With ≤9 components search is exhaustive; otherwise it checks 12,000 seeded
+candidates, including one balanced-component starting assignment. Simple necessary
+bounds (fewer than 9 components, or a component exceeding .35 of the entire
+corpus) or complete enumeration can return `status: infeasible` with
+`proven_infeasible: true`. Bounded failure returns `status: search_exhausted`,
+**not a proof of infeasibility**. Larger search budgets can be supplied through
+the Python API; the .35 gate never changes. A feasible heuristic candidate does
+not prove objective optimality. Determinism includes input-order invariance.
+The canonical input SHA-256 binds supplied tasks+labels, not a private-data replay.
+
+`kish_group_size_concentration = n² / Σ component_size²` is descriptive
+concentration, **not** a statistically independent effective sample size.
+Neither root/component counts nor a larger Kish number prove independence.
+No real re-split was performed for #24. Versioned label hygiene depends on #18;
+real distributions, .35 feasibility and dataset-version review remain external
+acceptance in #27. **Changing the test set invalidates direct comparison with
+historical frozen-v1 metrics**; retain both dataset/report versions separately.
+Synthetic old/new comparisons test behavior only, not real vision improvement.
+
+## Historical/default splitting guarantees (`prepare.py`)
 
 - Splits are **group-disjoint**: all tasks from one session (or near-duplicate
   cluster, 5-gram Jaccard ≥ 0.88) land in exactly one of train/calibration/test.
