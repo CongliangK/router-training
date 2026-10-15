@@ -108,3 +108,60 @@ Worked example rows (clearly synthetic, format-only) are in
 格式示例见 `data/synthetic-examples/`。冻结数据集的聚合画像（类分布、
 交叉表、组结构、已知偏斜与运行指标对照，不含原始数据）见
 [DATA-PROFILE.md](DATA-PROFILE.md)。
+
+## frozen-v1: known skew / 已知偏斜
+
+The current historical test split is frozen-v1, known skew. It has already
+been inspected; it is not a pristine independent holdout. Do not choose a
+checkpoint, hyperparameter, temperature, operating threshold, or routing
+policy using its scores or deletion results. Use calibration/new groups.
+Future data should support a natural-distribution set plus a separately
+reported stratified challenge set; neither exists merely because this report
+code exists.
+
+The historical aggregate split report has only 4 vision-positive training
+rows versus 74 test positives, and only 2 fast test rows. Issue #4 records that
+79 of 104 test rows (70 vision positives) come from one group. These are
+historical aggregate facts, not newly replayed results. Vision results must
+be read separately: they are mainly supported by a single task group.
+Resampling few groups does not create independent sources. Expert-label
+agreement does not establish candidate-model task success.
+
+CPU-only diagnostic command (standard library, no model/torch required):
+
+```sh
+python scripts/report_split.py --split-report data/split-report.json
+python scripts/report_split.py --split-report /path/to/split-report.json \
+  --predictions /path/to/fixed-test-predictions.jsonl --output /path/to/new-report.json
+```
+
+Without explicit rows, group sizes, performance, bootstrap, and deletion
+results are unavailable. JSONL rows require `label.tier`, `label.needs_vision`,
+`label.task_type`, and `split_group`. Labels alone allow group support counts;
+metrics require `answers` with each supported field's `choice`, `confidence`,
+and complete fixed-schema `probabilities`. Missing group IDs are never
+replaced with row IDs. Optional `group` is the original root identity from
+extraction; it is distinct from the merged `split_group`. Missing roots are
+unavailable, never inferred. Group/root counts describe supplied provenance,
+not proven statistical independence. The report exports aggregate counts
+and stable report-local group/root aliases only, not prompts or source IDs.
+Review even aggregate reports before sharing; small groups can be sensitive.
+
+Every supplied group is deleted in descending size from the SAME fixed
+predictions. No refit, retraining, tuning or LOGO cross-validation occurs.
+Each deletion reports remaining class/group/root support, nullable metrics,
+deltas and overall defined-score ranges. Absent support stays null, including
+zero/single-group bootstrap cases. Vision recall is separate from tier and
+task-type scores. Bootstrap uses the shared metric protocol (1,000 whole-group
+resamples, seed 0), with undefined resamples and support disclosed. The legacy
+metric key `independent_groups` counts observed clusters; independence is not
+verified. CLI input SHA-256 digests record reproducibility, never file paths.
+Existing output paths are refused. Supplied rows are explicitly test rows;
+the caller must provide the right version and fixed operating point. A row
+count comparison with the aggregate test count is not dataset authentication.
+
+New training reports append `frozen_test_diagnostics`: legacy evaluation
+includes baseline and tuned fixed-score sensitivity; grouped-dev attaches
+aggregate-only unavailable test metrics and never reads test rows for this
+appendix. Old artifacts and the split are untouched. Real private-data replay
+and provenance verification remain separate acceptance in #27.

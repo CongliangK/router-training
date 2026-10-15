@@ -264,3 +264,15 @@ seed 20261010、accumulation 8、label smoothing 0.05、beta 0.999、`--fullft -
 ## 许可证
 
 代码与文档：**Apache-2.0**（见 [LICENSE](LICENSE)、[NOTICE](NOTICE)）。基座模型上游 Apache-2.0；再分发微调权重须继承其义务。真实任务数据不随仓库分发，故不在本许可覆盖范围内。
+
+### 冻结测试集删组敏感性（CPU，issue #4）
+
+新报告注明 **frozen-v1，已知偏斜**，并附 `frozen_test_diagnostics`。
+运行 `python scripts/report_split.py --split-report data/split-report.json`
+可查看汇总计数；加 `--predictions <fixed-test.jsonl>` 可报告真实输入中的
+组支持量、分组 bootstrap 与固定预测删组敏感性。缺少预测时指标明确不可用。
+此分析不重训，不是 LOGO 交叉验证，也不证明独立模型质量；历史视觉正例主要
+由单一任务组支撑，须单独解读。禁止用 frozen-v1 选模型或调参。
+命令只需标准库，只输出聚合计数和局部组别名，拒绝覆盖已有输出。
+输入格式、根来源与合并组的区别、空类/null 语义及局限见 [DATA.md](docs/DATA.md)。
+真实私有数据回放仍单列 #27 验收。

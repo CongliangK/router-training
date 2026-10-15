@@ -2,8 +2,6 @@
 from __future__ import annotations
 import importlib.util, json, sys
 from pathlib import Path
-import torch
-from peft import PeftModel
 
 ROOT=Path(__file__).resolve().parent
 TIERS=['fast','balanced','flagship']
@@ -40,7 +38,9 @@ def load_engine(adapter=None,device='cuda',max_length=8192,full_checkpoint=None)
         # Full fine-tune product: weights already merged; no adapter layer.
         engine.backend.model.eval()
         return engine
-    if adapter: engine.backend.model=PeftModel.from_pretrained(engine.backend.model,str(adapter),is_trainable=False)
+    if adapter:
+        from peft import PeftModel
+        engine.backend.model=PeftModel.from_pretrained(engine.backend.model,str(adapter),is_trainable=False)
     return engine
 
 
@@ -69,6 +69,7 @@ def field_logits(engine,request,train=False):
 
 
 def score(engine,prompt,temperatures=None,adjustments=None):
+    import torch
     request,truncated=request_for(engine,prompt);engine.backend.model.eval()
     with torch.inference_mode(): logits,length=field_logits(engine,request)
     result={}
