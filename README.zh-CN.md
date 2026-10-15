@@ -8,6 +8,23 @@
 
 路由器只打分、不生成任务答案：固定选项 logits 决策，训练与服务共用同一条确定性截断链路（8K 上下文，超长走头/尾保留 + `[ROUTING_CONTEXT_TRUNCATED]` 标记）。
 
+## 显式六类标签（#18，仅公开 CPU 子集）
+
+默认/无版本 checkpoint 仍用**原样七类 v1 问题**；显式
+`--label-schema router-label-v2` 才选择六类 task_type 与 yes/no 视觉监督。
+未知/混合版本、checkpoint 问题哈希或类别顺序不符均硬失败。
+主要交付为可执行代码/脚本/样式表时优先 implementation；非编程创作/鉴赏才是
+creative。视觉动作不明、uncertain 无证据时保留待裁定/排除，不能强制二值化。
+
+详见[版本 API 与 CLI 契约](docs/LABEL-SCHEMA.md)和[标注标准](data/labeling/RUBRIC.md)。
+v2 prepare 只写新的独立目录；预检/训练/问题/运行元数据/服务/评估均携带版本；
+v2 服务加载前核对 run 与 calibration 的完整 schema 元数据。
+[15 条明确虚构的 creative+vision 例子](data/synthetic-examples/labels-v2-creative-vision.jsonl)
+（旗舰 4 条）**独立于 split，仅作补充**，不是实际任务、真实独立组支持或实测改善；
+不自动导入，不属于校准/测试。v3c 配方与冻结产物不变。
+**#18 仍 OPEN**：六条真实 uncertain 证据复核、16 条 creative 盲审、真实新版本溯源、
+组支持与无泄漏验收仍不可用。本变更不代表训练/冒烟/模型加载授权。
+
 ## 为什么值得看
 
 模型本身不稀奇，稀奇的是周围的工程：

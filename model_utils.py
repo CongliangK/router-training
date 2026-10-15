@@ -26,14 +26,22 @@ def reference_module():
     return module
 
 
-def load_engine(adapter=None,device='cuda',max_length=8192,full_checkpoint=None):
+def load_engine(adapter=None,device='cuda',max_length=8192,full_checkpoint=None,schema_version=None):
     # The base checkpoint natively supports 262144 positions; 8192 keeps every
     # historical task (max 3284 tokens incl. template) untruncated while the
     # head/tail scheme below remains the extreme-prompt safety net.
+    from label_schema import version, load_run_schema
+    selected=version(schema_version)
+    product=full_checkpoint or adapter
+    if product:
+        # Validate the run contract BEFORE reference_module/model loading. An
+        # explicit v2 request cannot reinterpret a metadata-free old checkpoint.
+        selected=load_run_schema(Path(product).parent,selected)
     reference=reference_module()
     base=ROOT/'models/intern-decision-0.8b'
     checkpoint=full_checkpoint if full_checkpoint else base
     engine=reference.DecisionEngine(checkpoint=checkpoint,device=device,max_length=max_length,temperature=1.0)
+    engine.label_schema_version=selected
     if full_checkpoint:
         # Full fine-tune product: weights already merged; no adapter layer.
         engine.backend.model.eval()
@@ -44,7 +52,15 @@ def load_engine(adapter=None,device='cuda',max_length=8192,full_checkpoint=None)
     return engine
 
 
-def request_for(engine,prompt,max_prompt_tokens=7700):
+def engine_schema(engine,schema_version=None):
+    from label_schema import version
+    bound=version(getattr(engine,'label_schema_version',None))
+    if schema_version is not None and version(schema_version)!=bound:
+        raise ValueError('requested schema differs from loaded engine schema')
+    return bound
+
+
+def request_for(engine,prompt,max_prompt_tokens=7700,schema_version=None):
     # Explicit, deterministic head/tail representation shared by training and serving.
     # The reserved marker cannot be injected by an untrusted delegated task.
     prompt=prompt.replace('<decision>','[reserved-marker]')
@@ -53,7 +69,8 @@ def request_for(engine,prompt,max_prompt_tokens=7700):
     if truncated:
         head=max_prompt_tokens*3//4;tail=max_prompt_tokens-head
         prompt=engine.tokenizer.decode(ids[:head])+'\n[ROUTING_CONTEXT_TRUNCATED]\n'+engine.tokenizer.decode(ids[-tail:])
-    return {'state':{'delegated_task':prompt},'questions':QUESTIONS},truncated
+    from label_schema import questions_for
+    return {'state':{'delegated_task':prompt},'questions':questions_for(engine_schema(engine,schema_version),QUESTIONS)},truncated
 
 
 def field_logits(engine,request,train=False):
@@ -68,13 +85,16 @@ def field_logits(engine,request,train=False):
     return fields,batch['input_ids'].shape[-1]
 
 
-def score(engine,prompt,temperatures=None,adjustments=None):
+def score(engine,prompt,temperatures=None,adjustments=None,schema_version=None):
     import torch
-    request,truncated=request_for(engine,prompt);engine.backend.model.eval()
+    from label_schema import questions_for
+    selected=engine_schema(engine,schema_version);questions=questions_for(selected,QUESTIONS)
+    request,truncated=request_for(engine,prompt,schema_version=selected);engine.backend.model.eval()
     with torch.inference_mode(): logits,length=field_logits(engine,request)
     result={}
     for field,values in logits.items():
-        labels=list(QUESTIONS[field]['criteria']);temperature=(temperatures or {}).get(field,1.0)
+        labels=list(questions[field]['criteria']);temperature=(temperatures or {}).get(field,1.0)
+        if len(values)!=len(labels):raise ValueError('logit width differs from selected label schema')
         if adjustments and field in adjustments:
             # Decision-side logit adjustment (Menon et al. 2020): subtracting
             # tau*log(prior) moves the argmax boundary away from majority classes.
@@ -84,7 +104,7 @@ def score(engine,prompt,temperatures=None,adjustments=None):
         probabilities=torch.softmax(values/temperature,dim=-1).cpu().tolist()
         best=max(range(len(labels)),key=lambda i:probabilities[i])
         result[field]={'choice':labels[best],'confidence':probabilities[best],'probabilities':dict(zip(labels,probabilities)),'logits':values.cpu().tolist()}
-    return {'answers':result,'input_tokens':length,'context_truncated':truncated}
+    return {'answers':result,'input_tokens':length,'context_truncated':truncated,'label_schema_version':selected}
 
 
 def read_jsonl(path):

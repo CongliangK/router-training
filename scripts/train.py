@@ -7,9 +7,9 @@ Two explicit modes (issue #2; no silent fallback between them):
   PRE-REGISTERED A/B/C role groups (--roles). --dry-run in this mode performs
   the real CPU structural preflight via scripts/validate_calibration.py —
   no model, no artifacts, no test access — instead of just printing a command.
-  --data-dir configures that preflight only; an actual launch always reads
-  the repository data/ directory (train_eval.py takes no data-dir), so a
-  non-default --data-dir is refused at launch and allowed only with --dry-run.
+  Under v1, --data-dir is preflight-only and non-default launches are refused.
+  Explicit v2 forwards --data-dir to the actual run as well, so both readers
+  validate the same new versioned dataset.
 
 Issue #14: BOTH modes now pass the complete v3c training recipe explicitly
 through one shared builder reading configs/v3c.json. The grouped entry point
@@ -36,6 +36,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_DIR = ROOT / 'data'
 RECIPE_PATH = ROOT / 'configs/v3c.json'
+if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
+from label_schema import LEGACY, V2, VERSIONS
 # configs/v3c.json keys that map to train_eval.py CLI flags. Everything else
 # in the file (description, run name, manifests, prompt budgets) is archive
 # metadata, not overridable training input.
@@ -49,12 +51,12 @@ RECIPE_ENUM_KEYS = {'optimizer': ('adamw', ('adamw', 'adamw8bit'))}
 
 
 def data_dir_guard(args, parser):
-    """Red-team F4: --data-dir feeds ONLY the structural preflight;
+    """Red-team F4: under v1 --data-dir feeds ONLY the structural preflight;
     train_eval.py always reads ROOT/data. An actual grouped launch with a
     non-default --data-dir would preflight one dataset and train on another,
     so it is refused outright. --dry-run (preflight only) may use any data
-    directory, e.g. a synthetic fixture."""
-    if not args.legacy and not args.dry_run \
+    directory, e.g. a synthetic fixture. V2 forwards the same path at launch."""
+    if not args.legacy and not args.dry_run and getattr(args,'label_schema',LEGACY)!=V2 \
             and Path(args.data_dir).resolve() != DEFAULT_DATA_DIR.resolve():
         parser.error('--data-dir is preflight-only: the actual grouped run always reads the '
                      f"repository data directory ({DEFAULT_DATA_DIR}); train_eval.py takes no data-dir. "
@@ -163,11 +165,14 @@ def main():
                              'are echoed and appear in the printed Command. Refused with --legacy, which '
                              'reproduces v3c unchanged')
     parser.add_argument('--data-dir', default=str(DEFAULT_DATA_DIR),
-                        help='Data directory for the grouped structural preflight ONLY (train.jsonl + '
-                             'calibration.jsonl; test.jsonl is never read). The actual run always reads the '
-                             'repository data/ directory, so a non-default --data-dir is refused at launch '
-                             'and allowed only together with --dry-run')
+                        help='V1: preflight-only; v2: also forwarded to the run (train.jsonl + '
+                             'calibration.jsonl; test.jsonl is never read). V1 launches retain the default '
+                             'repository data/ guard; v2 forwards this exact dataset path to training.')
+    parser.add_argument('--label-schema',choices=VERSIONS,default=LEGACY,help='Opt-in six-task v2; unversioned products stay seven-task v1')
+    parser.add_argument('--supplemental',type=Path,action='append',help='Explicit v2 synthetic supplemental JSONL (train only)')
     args = parser.parse_args()
+    if args.legacy and args.label_schema!=LEGACY:parser.error('--legacy requires router-label-v1')
+    if args.supplemental and args.label_schema!=V2:parser.error('--supplemental requires router-label-v2')
     if not args.run.replace('-', '').replace('_', '').isalnum():
         parser.error('Invalid run name')
     if (ROOT / 'artifacts' / args.run).exists():
@@ -205,12 +210,16 @@ def main():
     recipe, deviations = merged_recipe(json.loads(RECIPE_PATH.read_text()), args.recipe, parser)
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from validate_calibration import run_validation
-    ok, text = run_validation(args.data_dir, roles_path)
+    ok, text = run_validation(args.data_dir, roles_path,args.label_schema,args.supplemental)
     print('Structural preflight (CPU, anonymous, no model/artifacts/test):')
     print(text, flush=True)
     command = [sys.executable, str(ROOT / 'train_eval.py'), '--run', args.run,
                '--calibration-roles', str(roles_path)]
     command.extend(recipe_flags(recipe))
+    if args.label_schema==V2:
+        if recipe['synth']:parser.error('v2 requires explicit --recipe {"synth": false}; legacy synth is incompatible')
+        command.extend(['--label-schema',args.label_schema,'--data-dir',str(args.data_dir)])
+        for path in args.supplemental or []:command.extend(['--supplemental',str(path)])
     if args.max_tier_ece is not None:command.extend(['--max-tier-ece', str(args.max_tier_ece)])
     if args.smoke:
         command.append('--smoke')

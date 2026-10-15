@@ -9,6 +9,7 @@ import uvicorn
 from model_utils import ROOT,load_engine,score
 from policy import select,DEFAULT_ROUTES,validate_routes
 from extract import redact
+from label_schema import LEGACY, VERSIONS, version, resolve_run_schema
 
 class DecisionRequest(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -34,7 +35,8 @@ def record_observation(record):
     with (observations/'decisions.jsonl').open('a') as file:file.write(json.dumps(record,ensure_ascii=False)+'\n')
 
 
-def create_app(run='real-history-v1',routes=None,minimum_confidence=.9,collect_prompts=False,mode='diagnostic'):
+def create_app(run='real-history-v1',routes=None,minimum_confidence=.9,collect_prompts=False,mode='diagnostic',label_schema=LEGACY):
+    selected=version(label_schema)
     artifacts=ROOT/'artifacts'/run;state={};lock=threading.Lock()
     routes=validate_routes(routes if routes is not None else DEFAULT_ROUTES)
     if not 0<=minimum_confidence<=1:raise ValueError('Invalid minimum confidence')
@@ -42,17 +44,21 @@ def create_app(run='real-history-v1',routes=None,minimum_confidence=.9,collect_p
     def contract(recommendation_available=True):
         gate=state.get('gate',{'passed':False,'mode':'shadow','status':'not-loaded'})
         allowed='engine' in state and mode=='execution' and gate['passed'] is True and recommendation_available
-        return {'schema_version':2,'mode':mode,'quality_gate_passed':gate['passed'],
+        return {'schema_version':2,'label_schema_version':selected,'mode':mode,'quality_gate_passed':gate['passed'],
                 'quality_gate_mode':gate['mode'],'quality_gate_status':gate['status'],
                 'execution_allowed':allowed,'advisory_only':not allowed}
     @asynccontextmanager
     async def lifespan(app):
+        # Schema mismatch fails BEFORE model loading, even in diagnostic mode.
+        calibration=json.loads((artifacts/'calibration.json').read_text())
+        schema_path=artifacts/'label-schema.json'
+        run_schema=json.loads(schema_path.read_text()) if schema_path.exists() else None
+        resolve_run_schema(calibration,run_schema,selected)
         full=artifacts/'full-checkpoint'
         adapter=artifacts/'adapter'
-        if full.exists():state['engine']=load_engine(full_checkpoint=full)
-        elif adapter.exists():state['engine']=load_engine(adapter=adapter)
+        if full.exists():state['engine']=load_engine(full_checkpoint=full,schema_version=selected)
+        elif adapter.exists():state['engine']=load_engine(adapter=adapter,schema_version=selected)
         else:raise RuntimeError(f'No trained product found under {artifacts}')
-        calibration=json.loads((artifacts/'calibration.json').read_text())
         state['temperatures']=calibration['temperatures']
         state['adjustments']={'tier':calibration['tier_adjust']} if calibration.get('tier_adjust') else None
         state['gate']=read_gate(artifacts/'quality-gate.json')
@@ -94,8 +100,9 @@ def create_app(run='real-history-v1',routes=None,minimum_confidence=.9,collect_p
 
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--run',default='real-history-v1');p.add_argument('--port',type=int,default=19948);p.add_argument('--collect-prompts',action='store_true');p.add_argument('--routes',type=Path);p.add_argument('--minimum-confidence',type=float,default=.9);p.add_argument('--mode',choices=['diagnostic','execution'],default='diagnostic')
+    p.add_argument('--label-schema',choices=VERSIONS,default=LEGACY,help='Explicit checkpoint label/question schema; default preserves seven-task legacy')
     args=p.parse_args()
     if not args.run.replace('-','').replace('_','').isalnum():raise SystemExit('Invalid run name')
     if not 0<=args.minimum_confidence<=1:raise SystemExit('Invalid confidence threshold')
     routes=json.loads(args.routes.read_text()) if args.routes else DEFAULT_ROUTES
-    uvicorn.run(create_app(args.run,routes,args.minimum_confidence,args.collect_prompts,args.mode),host='127.0.0.1',port=args.port,log_level='info')
+    uvicorn.run(create_app(args.run,routes,args.minimum_confidence,args.collect_prompts,args.mode,args.label_schema),host='127.0.0.1',port=args.port,log_level='info')

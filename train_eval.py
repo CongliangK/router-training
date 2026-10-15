@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from peft import LoraConfig,get_peft_model
 from evaluation_metrics import target, per_class, bootstrap_ci, validate_answer, calibration_bins, routing_costs, metrics
 from split_reporting import split_report
+from label_schema import LEGACY, V2, VERSIONS, version, questions_for, metadata, validate_supervised_rows, validate_prediction_rows, training_supplemental
 from model_utils import ROOT,TIERS,TYPES,QUESTIONS,load_engine,read_jsonl,request_for,field_logits,score
 
 # --- Issue #14: training-reproducibility constants (scheduler / SWA audit) ---
@@ -187,10 +188,10 @@ def effective_config(args,raw_train_rows,epoch_row_counts,scheduler_report,swa_p
     return block
 
 
-def predict_rows(engine,rows):
+def predict_rows(engine,rows,schema_version=LEGACY):
     output=[]
     for i,row in enumerate(rows):
-        start=time.perf_counter(); prediction=score(engine,row['prompt'])
+        start=time.perf_counter(); prediction=score(engine,row['prompt'],schema_version=schema_version)
         output.append({'id':row['id'],'label':row['label'],**prediction,'latency_ms':(time.perf_counter()-start)*1000})
         # Keep the real grouping identity for cluster evaluation; never infer
         # independent rows when source grouping was not supplied.
@@ -200,10 +201,14 @@ def predict_rows(engine,rows):
     return output
 
 
-def fit_temperatures(rows):
+def fit_temperatures(rows,schema_version=LEGACY):
+    if version(schema_version)==V2:
+        raise ValueError('v2 requires grouped calibration; the legacy temperature fitter is v1 only')
+    validate_prediction_rows(rows,schema_version)
+    questions=questions_for(schema_version,QUESTIONS)
     fitted={}; diagnostics={}
-    for field in QUESTIONS:
-        labels=list(QUESTIONS[field]['criteria']);valid=[r for r in rows if target(r,field) in labels]
+    for field in questions:
+        labels=list(questions[field]['criteria']);valid=[r for r in rows if target(r,field) in labels]
         supported=set(target(r,field) for r in valid)==set(labels)
         if not supported:
             fitted[field]=2.747760550703;diagnostics[field]='missing classes; retained checkpoint temperature (not locally calibrated)';continue
@@ -213,11 +218,13 @@ def fit_temperatures(rows):
     return fitted,diagnostics
 
 
-def calibrated(rows,temperatures,adjustments=None):
+def calibrated(rows,temperatures,adjustments=None,schema_version=LEGACY):
+    validate_prediction_rows(rows,schema_version)
+    questions=questions_for(schema_version,QUESTIONS)
     rows=json.loads(json.dumps(rows))
     for row in rows:
         for field,answer in row['answers'].items():
-            labels=list(QUESTIONS[field]['criteria'])
+            labels=list(questions[field]['criteria'])
             values=torch.tensor(answer['logits'])
             if adjustments and field in adjustments:
                 for index,label in enumerate(labels):
@@ -272,7 +279,7 @@ def legacy_calibration_halves(calibration_rows,seed):
     return calib[:half],calib[half:] or calib
 
 
-def grouped_schema():
+def grouped_schema(schema_version=LEGACY):
     # Runtime business schema: assembled from the LIVE model_utils.QUESTIONS by
     # the SAME schema_from_questions the stdlib preflight uses (it parses this
     # file's source via questions_from_source), so preflight and run cannot
@@ -281,10 +288,10 @@ def grouped_schema():
     # is optional and fixed at T=1 (reported as not calibrated) — the legacy
     # 2.747 checkpoint fallback is never used by new runs.
     from calibration_groups import schema_from_questions
-    return schema_from_questions(QUESTIONS)
+    return schema_from_questions(questions_for(schema_version,QUESTIONS),schema_version)
 
 
-def build_grouped_plan(calibration_rows,roles_config):
+def build_grouped_plan(calibration_rows,roles_config,schema_version=LEGACY):
     # Issue #2 wiring: the pre-registered plan (A/B/C groups, support policy,
     # numeric protocol) is validated by the stdlib module BEFORE any model is
     # loaded or any artifact directory is created. check_roles_config is the
@@ -295,7 +302,7 @@ def build_grouped_plan(calibration_rows,roles_config):
     from calibration_groups import build_plan,check_roles_config,schema_from_questions
     check_roles_config(roles_config)
     return build_plan(rows=calibration_rows,role_groups=roles_config['role_groups'],
-                      schema=schema_from_questions(QUESTIONS),
+                      schema=schema_from_questions(questions_for(schema_version,QUESTIONS),schema_version),
                       support_policy=roles_config.get('support_policy'),protocol=roles_config.get('protocol'))
 
 
@@ -307,9 +314,13 @@ def run_grouped_calibration(plan,scored_rows,prior,protocol,checkpoint_ref):
     # row set that is not exactly role B, so a wiring mistake fails loudly.
     from calibration_groups import select_tau_oof
     by_id={row['id']:row for row in plan['rows_by_role']['B']}
+    selected=plan['schema'].get('label_schema_version',LEGACY)
+    active=[row for row in scored_rows if row['id'] in by_id]
+    validate_prediction_rows(active,selected)  # never stamp old seven-option predictions as v2
     logits_rows=[{'id':row['id'],'split_group':by_id[row['id']]['split_group'],'label':row['label'],
+                   'label_schema_version':row.get('label_schema_version',LEGACY),
                   'logits':{field:answer['logits'] for field,answer in row['answers'].items()}}
-                 for row in scored_rows if row['id'] in by_id]
+                 for row in active]
     return select_tau_oof(plan=plan,rows=logits_rows,prior=prior,protocol=protocol,checkpoint_ref=checkpoint_ref)
 
 
@@ -334,7 +345,7 @@ def servable_calibration(calibration):
             'binding':calibration['binding'],'note':calibration['note']}
 
 
-def grouped_smoke_pool(datasets,roles):
+def grouped_smoke_pool(datasets,roles,schema_version=LEGACY):
     # Grouped --smoke, honest and short (red-team F7): calibration keeps
     # WHOLE groups (smallest-support first) re-validated under the SAME
     # support policy — slicing rows would rebuild the issue #2 leak in
@@ -342,7 +353,7 @@ def grouped_smoke_pool(datasets,roles):
     # same 24 rows as legacy smoke so the run is actually short. The prior
     # is unaffected: run() captured real_train_rows before this slice.
     from calibration_groups import smoke_subpool
-    plan=smoke_subpool(datasets['calibration'],roles['role_groups'],grouped_schema(),
+    plan=smoke_subpool(datasets['calibration'],roles['role_groups'],grouped_schema(schema_version),
                        roles.get('support_policy'),roles.get('protocol'))
     return plan,datasets['train'][:24]
 
@@ -352,6 +363,13 @@ def run(args):
     # group-isolated calibration with PRE-REGISTERED A/B/C role groups; the
     # archived row-split calibration is reachable only through the explicit
     # --legacy-calibration flag. No new run may silently fall back to legacy.
+    selected=version(getattr(args,'label_schema',None));questions=questions_for(selected,QUESTIONS)
+    if selected==V2 and getattr(args,'legacy_calibration',False):
+        raise SystemExit('v2 labels cannot use archived legacy calibration')
+    if selected==V2 and args.synth:
+        raise SystemExit('v2 refuses legacy --synth; use explicit --supplemental v2 examples (train only)')
+    supplement=getattr(args,'supplemental',None) or []
+    if supplement and selected!=V2:raise SystemExit('--supplemental requires explicit router-label-v2')
     max_tier_ece=validate_ece_threshold(getattr(args,'max_tier_ece',None))
     legacy=bool(getattr(args,'legacy_calibration',False))
     roles_path=getattr(args,'calibration_roles',None)
@@ -370,23 +388,29 @@ def run(args):
     # Grouped dev runs never open the test split (dev-no-test). The legacy
     # path still reads test for its historical report; the complete
     # dev-no-test rework for training is NOT satisfied by this change.
-    datasets={name:read_jsonl(ROOT/'data'/f'{name}.jsonl') for name in (['train','calibration','test'] if legacy else ['train','calibration'])}
+    data_dir=Path(getattr(args,'data_dir',None) or ROOT/'data')
+    datasets={name:read_jsonl(data_dir/f'{name}.jsonl') for name in (['train','calibration','test'] if legacy else ['train','calibration'])}
+    for rows in datasets.values():validate_supervised_rows(rows,selected)
+    additions=training_supplemental(supplement,[r for rows in datasets.values() for r in rows],selected)
     plan=None;protocol=None;roles=None;real_train_rows=None
     if not legacy:
         roles=json.loads(Path(roles_path).read_text())
-        plan=build_grouped_plan(datasets['calibration'],roles)  # preflight BEFORE load_engine()/artifacts
+        plan=build_grouped_plan(datasets['calibration'],roles,selected)  # preflight BEFORE load_engine()/artifacts
         protocol=plan['protocol']
         real_train_rows=datasets['train'][:]  # captured before synthetic joins: priors must come from real unique train rows only
         # Prior preflight BEFORE any model/dir work (same truth as
         # scripts/validate_calibration.py): real unique train rows must
         # support every tier class, or the run fails before it starts.
         from calibration_groups import compute_prior
-        prior=compute_prior(real_train_rows,'tier',grouped_schema())
+        prior=compute_prior(real_train_rows,'tier',grouped_schema(selected))
         if args.structural_dry_run:
             from calibration_groups import anonymous_summary
             print('STRUCTURAL DRY RUN (no model, no artifacts, no test access)',json.dumps(anonymous_summary(plan),ensure_ascii=False),flush=True)
             return
         output.mkdir(parents=True,exist_ok=False)
+    if selected==V2:
+        (output/'label-schema.json').write_text(json.dumps(metadata(selected),ensure_ascii=False,indent=2)+'\n')
+    datasets['train'].extend(additions)  # explicit supplemental-only; AFTER real prior preflight
     # Synthetic augmentation (vision-boundary focus) joins train/calibration only;
     # the test split stays real-history-only so reported metrics stay honest.
     if args.synth:
@@ -419,7 +443,7 @@ def run(args):
             # Grouped smoke (F7): whole-group calibration sub-pool under the
             # SAME policy + a 24-row train slice, so it is genuinely short
             # without relaxing any gate. See grouped_smoke_pool.
-            plan,datasets['train']=grouped_smoke_pool(datasets,roles)
+            plan,datasets['train']=grouped_smoke_pool(datasets,roles,selected)
             args.epochs=1
             print('SMOKE MODE (grouped): 24 train rows, whole-group sub-pool',
                   len(plan['roles']['A'])+len(plan['roles']['B'])+len(plan['roles']['C']),
@@ -432,7 +456,7 @@ def run(args):
     # smoke slicing) can otherwise leave an empty/all-unsupported tier pool.
     if not any(target(row,'tier') in TIERS for row in selection_rows):
         raise ValueError('checkpoint selection requires at least one supported tier label; no model was loaded')
-    engine=load_engine();baseline={}
+    engine=load_engine(schema_version=selected);baseline={}
     if not legacy:
         # Grouped dev runs make no baseline predictions: baseline evaluation
         # historically reads the test split, which grouped dev runs must not
@@ -504,7 +528,7 @@ def run(args):
     # (red-team finding). Tier loss weights stay 1.0; vision keeps effective-number
     # weights because sampling does not balance the vision field.
     weights={tier:1.0 for tier in TIERS}
-    vision_weights={choice:(1-beta)/(1-beta**max(vision_counts.get(choice,0),1)) for choice in QUESTIONS['vision']['criteria']}
+    vision_weights={choice:(1-beta)/(1-beta**max(vision_counts.get(choice,0),1)) for choice in questions['vision']['criteria']}
     vscale=2/sum(vision_weights.values());vision_weights={c:round(w*vscale,4) for c,w in vision_weights.items()}
     print('tier weights',weights,'vision weights',vision_weights,flush=True)
     history=[];best_score=-1;start=time.perf_counter();updates=0;swa_pool=[]
@@ -514,12 +538,12 @@ def run(args):
         rows=epoch_train_rows[epoch]
         model.train();optimizer.zero_grad();running=0
         for i,row in enumerate(rows):
-            request,truncated=request_for(engine,row['prompt'])
+            request,truncated=request_for(engine,row['prompt'],schema_version=selected)
             with torch.autocast('cuda',dtype=torch.bfloat16,enabled=args.fullft):
                 logits,_=field_logits(engine,request,train=True)
             loss=0
             for field,coefficient in [('tier',1.),('vision',.7),('task_type',.3)]:
-                expected=target(row,field);labels=list(QUESTIONS[field]['criteria'])
+                expected=target(row,field);labels=list(questions[field]['criteria'])
                 if expected not in labels:continue
                 field_loss=F.cross_entropy(logits[field].unsqueeze(0),torch.tensor([labels.index(expected)],device=logits[field].device),label_smoothing=args.label_smoothing)
                 if field=='tier':field_loss=field_loss*weights[expected]
@@ -531,7 +555,7 @@ def run(args):
                 optimizer.step();optimizer.zero_grad();updates+=1
                 if scheduler is not None:scheduler.step()
             if (i+1)%25==0:print('train epoch',epoch+1,'sample',i+1,'/',len(rows),'loss',round(running/(i+1),4),flush=True)
-        model.eval();validation=predict_rows(engine,selection_rows);validation_metrics=metrics(validation)
+        model.eval();validation=predict_rows(engine,selection_rows,selected);validation_metrics=metrics(validation,schema_version=selected)
         # Epoch selection now maximizes tier macro-F1 (imbalance-aware) instead of
         # NLL, which favored the majority class and locked in late conservative epochs.
         score=require_selection_score(validation_metrics['tier_per_class']['macro_f1'])
@@ -566,7 +590,7 @@ def run(args):
         avg=average_state_dicts([snap for _,snap in swa_pool])
         soup_state=soup_state_dict(engine.backend.model.state_dict(),avg)
         engine.backend.model.load_state_dict(soup_state);engine.backend.model.eval()
-        soup_metrics=metrics(predict_rows(engine,selection_rows))
+        soup_metrics=metrics(predict_rows(engine,selection_rows,selected),schema_version=selected)
         soup_f1=require_selection_score(soup_metrics['tier_per_class']['macro_f1'])
         print('soup macro_f1',round(soup_f1,4),'vs single-best',round(best_score,4),flush=True)
         if soup_f1>=best_score:
@@ -597,6 +621,8 @@ def run(args):
     # (effective LR, oversampled per-epoch update counts, scheduler shape,
     # final SWA pool members) — recorded separately from raw CLI input.
     effective=effective_config(args,raw_train_rows,epoch_row_counts,scheduler_report,swa_pool)
+    effective['label_schema']=metadata(selected)
+    effective['supplemental_rows']=len(additions)
     effective['evaluation_policy']={'max_tier_ece':max_tier_ece,'metric_definition_version':2}
     if not legacy:
         # Grouped calibration tail (issue #2): score ONLY role-B rows with the
@@ -606,7 +632,7 @@ def run(args):
         # compared models provably shared one plan, folds, grid, and budget.
         # This is a development estimate, not an independent evaluation.
         from calibration_groups import checkpoint_digest
-        scored_b=predict_rows(engine,plan['rows_by_role']['B'])
+        scored_b=predict_rows(engine,plan['rows_by_role']['B'],selected)
         write_predictions(output/'scored-B.jsonl',scored_b)
         # Prior was preflighted above from REAL unique train rows only
         # (synthetic augmentation and repeated ids excluded; missing tier
@@ -619,6 +645,9 @@ def run(args):
         checkpoint_ref=json.dumps(checkpoint_digest(checkpoint_dir),sort_keys=True)
         calibration=run_grouped_calibration(plan,scored_b,{'tier':prior['probabilities']},protocol,checkpoint_ref)
         servable=servable_calibration(calibration)
+        if selected==V2:
+            calibration['label_schema']=metadata(selected)
+            if servable is not None:servable['label_schema']=metadata(selected)
         if servable is not None:
             # Only a selected calibration is servable: temperatures fitted on
             # adjusted logits ship together with the tier_adjust the server
@@ -628,7 +657,7 @@ def run(args):
                  'Training prerequisites under the pending evaluation protocol (approved development data/protocol) are NOT yet satisfied; this run is not training-ready or production-ready.']
         if calibration['status']!='selected':
             reasons.append('No feasible tau under the registered protocol: temperatures were not calibrated and NO calibration.json was written; the server refuses to load this run rather than serve unadjusted logits.')
-        report={'run':args.run,'seed':args.seed,'mode':'grouped-dev','base_model':json.loads((ROOT/'model-manifest.json').read_text()),'training':{'epochs':args.epochs,'rank':args.rank,'lr':effective_lr,'accumulation':args.accumulation,'trainable_parameters':trainable,'optimizer_updates':updates,'seconds':time.perf_counter()-start,'history':history},'effective_config':effective,'evaluation_basis':'group-isolated development calibration (A: checkpoint selection, B: out-of-fold temperature/tau); NOT an independent evaluation','calibration':calibration,'tier_class_weights':weights,'vision_class_weights':vision_weights,'quality_gate':{'passed':False,'mode':'shadow','reasons':reasons},'split_report':json.loads((ROOT/'data/split-report.json').read_text())}
+        report={'run':args.run,'seed':args.seed,'mode':'grouped-dev','base_model':json.loads((ROOT/'model-manifest.json').read_text()),'training':{'epochs':args.epochs,'rank':args.rank,'lr':effective_lr,'accumulation':args.accumulation,'trainable_parameters':trainable,'optimizer_updates':updates,'seconds':time.perf_counter()-start,'history':history},'effective_config':effective,'evaluation_basis':'group-isolated development calibration (A: checkpoint selection, B: out-of-fold temperature/tau); NOT an independent evaluation','calibration':calibration,'tier_class_weights':weights,'vision_class_weights':vision_weights,'quality_gate':{'passed':False,'mode':'shadow','reasons':reasons},'split_report':json.loads((data_dir/'split-report.json').read_text())}
         report['quality_gate']=apply_ece_veto(report['quality_gate'],None,max_tier_ece)
         report['frozen_test_diagnostics']=split_report(report['split_report'])
         (output/'report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
@@ -678,7 +707,7 @@ def run(args):
     if tuned_metrics['vision_positive_examples']<20:gate_reasons.append('Fewer than 20 independent vision-positive test examples.')
     if (tuned_metrics['flagship_underroute_rate'] or 0)>.05:gate_reasons.append('Flagship under-routing exceeds 5%.')
     if (tuned_metrics['vision_false_negative_rate'] or 0)>.05:gate_reasons.append('Vision false-negative rate exceeds 5%.')
-    report={'run':args.run,'seed':args.seed,'base_model':json.loads((ROOT/'model-manifest.json').read_text()),'training':{'epochs':args.epochs,'rank':args.rank,'lr':effective_lr,'accumulation':args.accumulation,'trainable_parameters':trainable,'optimizer_updates':updates,'seconds':time.perf_counter()-start,'history':history},'effective_config':effective,'evaluation_basis':'agreement with fresh expert prompt-only labels; NOT real generation task success','baseline':baseline_metrics,'finetuned':tuned_metrics,'baseline_temperatures':baseline_temps,'baseline_calibration_notes':baseline_temp_notes,'temperatures':temps,'calibration_notes':temp_notes,'logit_adjustment':{'sweep':sweep,'chosen':chosen},'tier_class_weights':weights,'vision_class_weights':vision_weights,'quality_gate':{'passed':False,'mode':'shadow','reasons':gate_reasons},'split_report':json.loads((ROOT/'data/split-report.json').read_text())}
+    report={'run':args.run,'seed':args.seed,'base_model':json.loads((ROOT/'model-manifest.json').read_text()),'training':{'epochs':args.epochs,'rank':args.rank,'lr':effective_lr,'accumulation':args.accumulation,'trainable_parameters':trainable,'optimizer_updates':updates,'seconds':time.perf_counter()-start,'history':history},'effective_config':effective,'evaluation_basis':'agreement with fresh expert prompt-only labels; NOT real generation task success','baseline':baseline_metrics,'finetuned':tuned_metrics,'baseline_temperatures':baseline_temps,'baseline_calibration_notes':baseline_temp_notes,'temperatures':temps,'calibration_notes':temp_notes,'logit_adjustment':{'sweep':sweep,'chosen':chosen},'tier_class_weights':weights,'vision_class_weights':vision_weights,'quality_gate':{'passed':False,'mode':'shadow','reasons':gate_reasons},'split_report':json.loads((data_dir/'split-report.json').read_text())}
     report['quality_gate']=apply_ece_veto(report['quality_gate'],tuned_metrics,max_tier_ece)
     report['frozen_test_diagnostics']={'baseline':split_report(report['split_report'],calibrated(baseline['test'],baseline_temps)),
                                       'finetuned':split_report(report['split_report'],calibrated(tuned['test'],temps,{'tier':tier_adjust}))}
@@ -689,6 +718,9 @@ def run(args):
 
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--run',default='real-history-v1');p.add_argument('--epochs',type=int,default=6);p.add_argument('--rank',type=int,default=8);p.add_argument('--lr',type=float,default=1e-4,help='LoRA initial learning rate; IGNORED under --fullft, which fixes the initial LR at 2e-6 (official recipe — effective_config records effective vs requested)');p.add_argument('--accumulation',type=int,default=8);p.add_argument('--seed',type=int,default=20261010);p.add_argument('--synth',action='store_true',help='merge data/synth/*.jsonl into train/calibration');p.add_argument('--beta',type=float,default=.999);p.add_argument('--mlp',action='store_true',help='extend LoRA to MLP and all attention output/input projections (deeper modification)');p.add_argument('--fullft',action='store_true',help='full fine-tune of the language backbone (deepest modification; vision tower stays frozen via LoRA-free path). LR schedule (issue #14): 3%% warmup + cosine over the OVERSAMPLED optimizer-update count (tail batch ceil), progress clamped to [0,1], decay floor at 10%% of the initial LR (2e-7; the archived v3c used a 1e-3 multiplier floor)');p.add_argument('--label-smoothing',type=float,default=.05);p.add_argument('--swa',action='store_true',help='average the 3 best epochs by selection macro-F1 (model soup guardrail; strict top-3 pool with eviction — issue #14)');p.add_argument('--smoke',action='store_true',help='short pipeline validation run: legacy = 24 train rows, 6+6 calibration rows, 1 epoch; grouped = 24 train rows + whole-group calibration sub-pool, 1 epoch (support gates never relaxed)')
+    p.add_argument('--label-schema',choices=VERSIONS,default=LEGACY)
+    p.add_argument('--data-dir',type=Path,default=None,help='Explicit dataset directory; v2 uses new versioned prepare outputs')
+    p.add_argument('--supplemental',type=Path,action='append',help='Explicit v2 synthetic supplemental JSONL; train only, never real support')
     p.add_argument('--max-tier-ece',type=float,default=None,help='Pre-register an optional maximum tier ECE in [0,1]; extra veto only, never passes the quality gate; no default threshold')
     p.add_argument('--legacy-calibration',action='store_true',help='reproduce the archived v3c row-split calibration exactly (issue #2: explicit legacy; new runs default to group-isolated calibration)')
     p.add_argument('--optimizer',default='adamw',choices=['adamw','adamw8bit'],help='optimizer over trainable params: adamw (default; byte-identical to the archived v3c) or adamw8bit (bitsandbytes 8-bit m/v states — trades exact AdamW moments for ~2.8GiB VRAM on this 16GB GPU; requires the RUNTIME-side bitsandbytes install and exits loudly when missing, never silently falls back). LR semantics identical: fullft fixes the initial LR at 2e-6 under both')

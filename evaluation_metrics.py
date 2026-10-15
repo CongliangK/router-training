@@ -1,12 +1,13 @@
 """Shared CPU-only evaluation metrics; no training or model imports."""
 import collections, math, random
 from model_utils import TIERS, QUESTIONS
+from label_schema import LEGACY, V2, version, questions_for, check_row_versions, validate_supervised_rows, validate_prediction_rows
 
 def target(row,field):
     return row['label'][{'tier':'tier','vision':'needs_vision','task_type':'task_type'}[field]]
 
 
-def per_class(valid,field,low_support_threshold=10):
+def per_class(valid,field,low_support_threshold=10,schema_version=LEGACY):
     """Fixed-schema macro F1; undefined class ratios are null, never evidence.
 
     Historical macro-F1 includes EVERY schema class with zero_division=0.
@@ -15,7 +16,9 @@ def per_class(valid,field,low_support_threshold=10):
     """
     if type(low_support_threshold) is not int or low_support_threshold<1:
         raise ValueError('low_support_threshold must be a positive integer')
-    labels=list(QUESTIONS[field]['criteria']);n=len(valid);out={}
+    check_row_versions(valid,schema_version)
+    if version(schema_version)==V2:validate_prediction_rows(valid,schema_version)
+    labels=list(questions_for(schema_version,QUESTIONS)[field]['criteria']);n=len(valid);out={}
     for c in labels:
         tp=sum(1 for r in valid if r['answers'][field]['choice']==c and target(r,field)==c)
         fp=sum(1 for r in valid if r['answers'][field]['choice']==c and target(r,field)!=c)
@@ -135,13 +138,17 @@ def routing_costs(valid,cost_matrix=None):
     return out
 
 
-def metrics(rows,low_support_threshold=10,cost_matrix=None):
+def metrics(rows,low_support_threshold=10,cost_matrix=None,schema_version=LEGACY):
+    selected=version(schema_version)
+    validate_prediction_rows(rows,selected)
+    questions=questions_for(selected,QUESTIONS)
     result={'rows':len(rows),'context_truncated':sum(r['context_truncated'] for r in rows),
             'mean_latency_ms':sum(r['latency_ms'] for r in rows)/len(rows) if rows else None,
             'metric_definition_version':2,'nll_probability_floor':1e-12}
     valid_by_field={}
-    for field in QUESTIONS:
-        valid=[r for r in rows if target(r,field) in QUESTIONS[field]['criteria']];labels=list(QUESTIONS[field]['criteria'])
+    result['label_schema_version']=selected
+    for field in questions:
+        valid=[r for r in rows if target(r,field) in questions[field]['criteria']];labels=list(questions[field]['criteria'])
         valid_by_field[field]=valid
         matrix={label:dict.fromkeys(labels,0) for label in labels};nll=brier=0;n=len(valid)
         for row in valid:
@@ -150,7 +157,7 @@ def metrics(rows,low_support_threshold=10,cost_matrix=None):
             nll-=math.log(max(1e-12,answer['probabilities'][expected]))
             brier+=sum((answer['probabilities'][label]-(label==expected))**2 for label in labels)
         correct=sum(matrix[l][l] for l in labels);bins=calibration_bins(valid,field)
-        pc=per_class(valid,field,low_support_threshold)
+        pc=per_class(valid,field,low_support_threshold,selected)
         result[field]={'evaluated_rows':n,'excluded_rows':len(rows)-n,'status':'available' if n else 'unavailable',
                        'accuracy':correct/n if n else None,'macro_f1':pc['macro_f1'],'nll':nll/n if n else None,
                        'brier':brier/n if n else None,'ece_5_bins':sum(b['contribution'] for b in bins) if n else None,

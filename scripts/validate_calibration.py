@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from label_schema import LEGACY, VERSIONS, validate_supervised_rows, training_supplemental
 from calibration_groups import PlanError, compute_prior, preflight_roles, anonymous_summary
 
 
@@ -33,7 +34,7 @@ def _read_jsonl(path):
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-def run_validation(data_dir, roles_path):
+def run_validation(data_dir, roles_path, schema_version=LEGACY, supplemental_paths=None):
     """Returns (ok, text). data_dir must contain train.jsonl and
     calibration.jsonl; test.jsonl is intentionally never read."""
     data_dir = Path(data_dir)
@@ -42,7 +43,9 @@ def run_validation(data_dir, roles_path):
     calibration_rows = _read_jsonl(data_dir / 'calibration.jsonl')
     roles_config = json.loads(roles_path.read_text())
     try:
-        plan = preflight_roles(calibration_rows, roles_config)
+        validate_supervised_rows(train_rows,schema_version)
+        additions=training_supplemental(supplemental_paths,train_rows+calibration_rows,schema_version)
+        plan = preflight_roles(calibration_rows, roles_config,schema_version=schema_version)
         priors = {}
         for head, spec in plan['schema']['heads'].items():
             if spec.get('adjust'):
@@ -52,8 +55,11 @@ def run_validation(data_dir, roles_path):
                                 'excluded_duplicate': prior['excluded_duplicate']}
         summary = anonymous_summary(plan)
         summary['priors'] = priors
+        summary['supplemental_rows']=len(additions)
         return True, json.dumps({'ok': True, 'plan': summary}, ensure_ascii=False, indent=2)
-    except PlanError as error:
+    except OSError:
+        return False,json.dumps({'ok':False,'error':'supplemental input cannot be read (path withheld)'})
+    except ValueError as error:
         return False, json.dumps({'ok': False, 'error': str(error)}, ensure_ascii=False)
 
 
@@ -62,8 +68,10 @@ def main():
     parser.add_argument('--data-dir', default=str(ROOT / 'data'),
                         help='Directory holding train.jsonl and calibration.jsonl (test.jsonl is never read)')
     parser.add_argument('--roles', required=True, help='Roles config JSON with pre-registered A/B/C groups')
+    parser.add_argument('--label-schema',choices=VERSIONS,default=LEGACY)
+    parser.add_argument('--supplemental',type=Path,action='append',help='Validate explicit v2 train-only supplements without using them for support')
     args = parser.parse_args()
-    ok, text = run_validation(args.data_dir, args.roles)
+    ok, text = run_validation(args.data_dir, args.roles,args.label_schema,args.supplemental)
     print(text)
     return 0 if ok else 1
 

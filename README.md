@@ -12,6 +12,26 @@ flagship), `needs_vision` (yes / no), and `task_type` (7 classes) — which a ca
 map onto concrete model routes. The router never generates task answers; it only
 scores fixed decision options from the model's logits.
 
+## Opt-in six-task labels (#18; public CPU subset)
+
+Default/unversioned checkpoints still use the **unchanged seven-type v1 questions**.
+Explicit `--label-schema router-label-v2` selects six task types and yes/no vision;
+unknown/mixed versions or incompatible checkpoint question hashes fail closed.
+Executable code/scripts/stylesheets take precedence over a creative subject;
+nonprogramming creation/appreciation is creative. Ambiguous visual actions and
+unresolved vision remain adjudication/excluded, never forced binary.
+
+See the [versioned API and CLI contract](docs/LABEL-SCHEMA.md) and
+[labeling rubric](data/labeling/RUBRIC.md). Prepare writes v2 only to a new separate
+directory; preflight/train/model questions/run metadata/serve/evaluation carry the
+selected version. V2 serving requires matching run + calibration schema metadata.
+The [15 clearly synthetic creative+vision examples](data/synthetic-examples/labels-v2-creative-vision.jsonl)
+(4 flagship) are **split-independent supplemental only**, not real support or
+measured improvement; no automatic ingestion or calibration/test membership.
+Frozen v3c recipe/artifacts are unchanged. **#18 remains OPEN**: six real uncertain
+reviews, 16 creative blinded reviews, real version provenance/group support and
+no-leak acceptance are unavailable. No training, smoke or model loading is implied.
+
 ## Why this exists
 
 Multi-agent harnesses waste money and latency when every subtask goes to the largest

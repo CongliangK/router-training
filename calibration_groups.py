@@ -53,7 +53,7 @@ BUSINESS_HEAD_FLAGS = {
 }
 
 
-def schema_from_questions(questions):
+def schema_from_questions(questions, schema_version=None):
     """Assemble the calibration schema from a QUESTIONS-shaped mapping
     ({head: {'criteria': {class: ...}}}). Single assembly point shared by the
     runtime path (train_eval.grouped_schema) and the stdlib source-parsed
@@ -68,7 +68,14 @@ def schema_from_questions(questions):
             raise PlanError(f'business schema needs an ordered non-empty class table for head {head}')
         spec['classes'] = list(criteria)
         heads[head] = spec
-    return {'heads': heads}
+    result={'heads': heads}
+    if schema_version is not None:
+        from label_schema import version, V2, SIX_TYPES
+        if version(schema_version)==V2:
+            if heads['task_type']['classes']!=list(SIX_TYPES):
+                raise PlanError('v2 business schema needs exactly the ordered six-task classes')
+            result['label_schema_version']=V2
+    return result
 
 
 def questions_from_source(path=None):
@@ -130,10 +137,11 @@ def questions_from_source(path=None):
     return questions
 
 
-def default_business_schema(path=None):
-    """The stdlib-side business schema: parsed from the same model_utils.py
-    the run imports, assembled by the same schema_from_questions."""
-    return schema_from_questions(questions_from_source(path))
+def default_business_schema(path=None, schema_version=None):
+    """Legacy AST source remains authoritative; v2 is an explicit derivation."""
+    from label_schema import version, questions_for
+    selected=version(schema_version)
+    return schema_from_questions(questions_for(selected,questions_from_source(path)),selected)
 
 # PROVISIONAL example support gates (NOT user-frozen): A5/B6/C5 role groups,
 # >=5 rows and >=2 groups per required-head class per region, >=2 groups per
@@ -251,6 +259,9 @@ def validate_rows(rows, schema):
     (support accounting reflects that; nothing is silently relabeled)."""
     if not isinstance(rows, list) or not rows:
         raise PlanError('rows must be a non-empty list')
+    from label_schema import validate_supervised_rows
+    try:validate_supervised_rows(rows,schema.get('label_schema_version'))
+    except ValueError as error:raise PlanError(str(error)) from error
     heads = schema['heads']
     seen = set()
     bad_id = bad_group = bad_label = duplicates = 0
@@ -499,6 +510,9 @@ def compute_prior(rows, head, schema, add_one=True):
     real support (a silent zero-count prior is not acceptable for new runs;
     the archived legacy path keeps its own original prior untouched).
     add-one smoothing is a PROVISIONAL protocol choice."""
+    from label_schema import validate_supervised_rows
+    try:validate_supervised_rows(rows,schema.get('label_schema_version'),allow_supplemental=True)
+    except ValueError as error:raise PlanError(str(error)) from error
     spec = schema['heads'][head]
     classes = spec['classes']
     seen = set()
@@ -702,6 +716,9 @@ def select_tau_oof(plan, rows, prior, checkpoint_ref, protocol=None):
 
     if not isinstance(rows, list):
         raise PlanError('scored rows must be a list')
+    from label_schema import validate_supervised_rows
+    try:validate_supervised_rows(rows,schema.get('label_schema_version'))
+    except ValueError as error:raise PlanError(str(error)) from error
     scored = {}
     for row in rows:
         rid = row.get('id') if isinstance(row, dict) else None
@@ -715,9 +732,9 @@ def select_tau_oof(plan, rows, prior, checkpoint_ref, protocol=None):
                         'roles A/C and any test rows must never reach temperature/tau fitting')
     for row in rows:
         for head, spec in heads.items():
-            if spec.get('calibration') != 'temperature':
-                continue
             values = (row.get('logits') or {}).get(head)
+            if spec.get('calibration') != 'temperature' and values is None:
+                continue  # fixed optional heads may omit logits, never mis-size supplied ones
             if not isinstance(values, list) or len(values) != len(spec['classes']) \
                     or not all(_finite_number(v) for v in values):
                 raise PlanError(f'scored logits invalid for head {head} '
@@ -844,7 +861,8 @@ def anonymous_summary(plan):
     counts = _group_row_counts([r for role in ROLES for r in rows_by_role[role]])
     folds = [{'fold': i, 'groups': len(f), 'rows': sum(counts[g] for g in f)}
              for i, f in enumerate(plan['folds'])]
-    return {'mode': plan['mode'], 'roles': {r: {'groups': len(roles[r]), 'rows': len(rows_by_role[r])} for r in ROLES},
+    from label_schema import version
+    return {'mode': plan['mode'], 'label_schema_version':version(plan['schema'].get('label_schema_version')), 'roles': {r: {'groups': len(roles[r]), 'rows': len(rows_by_role[r])} for r in ROLES},
             'folds': folds, 'support': plan['support'],
             'optional_head_status': plan['optional_head_status'],
             'plan_hash': plan['plan_hash'], 'protocol_hash': plan['protocol_hash']}
@@ -873,7 +891,7 @@ def check_roles_config(roles_config):
                         f"{list(ROLES_CONFIG_KEYS)} — a key the run would ignore cannot pass preflight")
 
 
-def preflight_roles(calibration_rows, roles_config, schema=None):
+def preflight_roles(calibration_rows, roles_config, schema=None, schema_version=None):
     """Shared preflight used by every entry point: builds and validates a
     protocol plan from a roles config object ({'role_groups': {...},
     'support_policy': {...}?, 'protocol': {...}?}). The schema is NOT
@@ -882,7 +900,7 @@ def preflight_roles(calibration_rows, roles_config, schema=None):
     imports), so preflight and run cannot validate different truths."""
     check_roles_config(roles_config)
     return build_plan(rows=calibration_rows, role_groups=roles_config['role_groups'],
-                      schema=schema or default_business_schema(),
+                      schema=schema or default_business_schema(schema_version=schema_version),
                       support_policy=roles_config.get('support_policy'),
                       protocol=roles_config.get('protocol'))
 
