@@ -36,7 +36,7 @@ New v2 recovery labels explicitly carry `task_label_schema_version` and `label_s
 Prepare requires a **new separate output directory**, refuses any existing output,
 retains near-duplicate unions even through excluded tasks, and writes resolved
 splits, the adjudication ledger, schema metadata and counts. It does not change
-split objectives/support gates (#24 is a separate integration). No real migration
+legacy split objectives/support gates (task-v2 + split-v2 is explicitly unsupported). No real migration
 has been run by this change.
 
 ```sh
@@ -107,13 +107,13 @@ Legal schemas and synthetic passes do not establish any support/performance goal
 
 ## Concurrent integration boundary
 
-- #8 dual-source ingest: compose its source schema with `task_label_schema_version`;
+- #8 dual-source ingest: keep its source schema distinct from `task_label_schema_version`;
   source/outcome schema numbers are NOT label versions. Preserve measured shadow
   partition and never fabricate understanding labels. Overlap: prepare, train
   reader/preflight, DATA/README docs.
 - #24 splitter: feed only resolved v2 labels while preserving duplicate unions,
   immutable outputs and pending counts; its objectives/feasibility remain separate.
-  Overlap: prepare and DATA/README docs. No branch was merged here.
+  Overlap: prepare and DATA/README docs. Exact #8 dependency a77f9af was merged here, including reviewed split-v2, but not approved/main.
 - #6/#23 server/policy: retain the new label-schema startup gate and response field
   beside policy-cause/identity/effort schema fields; preserve execution permissions.
   Overlap: server, README docs, ASGI tests. No routes/capabilities were changed.
@@ -128,3 +128,47 @@ prepare 新目录、预检、训练请求、校准、元数据、服务启动与
 服务加载前核对完整问题哈希与类别顺序。合成 15 条（旗舰 4）只作独立于 split
 的补充例子，需显式授权加入训练，不能填真实支持门。六条真实 uncertain、
 16 条 creative 盲审与无泄漏/组支持验收仍不可用，#18 不关闭。
+
+## Composed interface matrix (#8 / #18 / #24)
+
+`label_schema.py` is the unchanged #8 intake API; `task_label_schema.py` is the
+independent #18 question/semantic API. There is no class-table patching or implicit
+migration. `label_schema_version: 1` is an intake/source contract integer (currently
+in unified split reports); it is NEVER `router-label-v1/v2`. Semantic rows, engine,
+metrics and metadata use **`task_label_schema_version`** instead. An ambiguous old
+semantic string in `label_schema_version`, bool, or unsupported source integer
+fails at the composed prepare/split/preflight/metrics boundaries. Complete run
+metadata stays under `label_schema`, with the semantic key, hash and ordered classes.
+
+| Task semantics | Split algorithm | Source / operation | Support |
+|---|---|---|---|
+| v1 (default) | frozen-v1 | expert-only, legacy five outputs | supported, historical bytes/reruns unchanged |
+| v1 | frozen-v1 | unified expert or gated expert+measured; prepare/preflight | supported, #8 gate replay/fresh bundle; expert supervision + separate measured shadow |
+| v1 | split-v2 | expert-only new versioned bundle | supported, .35 cap/root+transitive components/no overwrite/infeasibility unchanged |
+| v1 | split-v2 | unified/outcomes/routes/prepare-preflight | unsupported; CLI refuses before input reads/writes; APIs reject keywords |
+| v2 (explicit) | frozen-v1 algorithm | reviewed expert-only, new separate output | supported; pending/excluded ledger retained, never supervised; duplicate unions precede exclusion |
+| v2 | frozen-v1 algorithm | unified/measured/routes or prepare --preflight | unsupported; dispatcher refuses before input reads/writes |
+| v2 | split-v2 | any source | unsupported; explicit CLI refuses before reads/writes; undeclared v2 inputs fail validation before directory creation |
+| v2 | already prepared expert splits | structural calibration preflight, launcher dry-run, training interfaces, score/server/metrics | supported with matching explicit semantics/complete run metadata; no actual training performed |
+
+A split-v2 expert output can be evaluated only through an explicit future filename
+adapter: current launcher reads train.jsonl/calibration.jsonl, not split-v2 names.
+There is no automatic split-v2-to-training adapter. Existing unified bundles can
+be read by the expert-only split-v2 path; it does not migrate their shadow/evidence.
+Neither task version admits measured shadow rows into supervision or metrics.
+Source API alone remains byte-for-byte upstream; version composition is owned by
+the dispatcher and task-boundary validator, not a reinterpretation inside #8.
+
+The merged #8 commit is a **strong pending dependency**, not approved/main. Do not
+publish this candidate until its independent round-2 review passes and upstream is
+merged. This integrated SHA needs a fresh FULL red-team; no previous approval
+transfers. #6/#23 were NOT imported: future coexistence must compose server startup
+schema gate, response semantic version, policy causes, candidate identity/effort and
+execution permissions together. Original #18 remains OPEN: six uncertain reviews,
+16 creative prediction-blind reviews and real provenance/support/no-leak evidence
+remain external (Refs #5, #8, #24, #26, #27; calibration/loss dependencies #19–22).
+
+中文：来源版本整数与任务语义版本分离；#8 模块/API 原样保留，#18 使用独立模块和
+`task_label_schema_version`。v2 仅支持旧切分算法的专家新目录与显式后续接口；
+v2+统一/实测/prepare预检/split-v2 均在写入前拒绝，不声称真实 v2 重切成功。
+#8 仍是待独立二轮通过并合入上游的强依赖；集成 SHA 必须全新完整红队，不能沿用批准。

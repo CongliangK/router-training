@@ -54,7 +54,7 @@ def resolve_run_schema(calibration, run_metadata=None, requested=LEGACY):
     selected=version(requested)
     if not isinstance(calibration,dict):raise ValueError('calibration must be an object')
     declared=calibration.get('label_schema')
-    if 'task_label_schema_version' in calibration:
+    if 'label_schema_version' in calibration or 'task_label_schema_version' in calibration:
         raise ValueError('run schema must use complete label_schema metadata, not a bare version')
     if declared is None:
         if selected!=LEGACY or run_metadata is not None:
@@ -84,6 +84,14 @@ def check_row_versions(rows, schema_version=LEGACY):
     for row in rows:
         if not isinstance(row,dict):raise ValueError('label rows must be objects')
         label=row.get('label') or {}
+        # Source integers and task/question versions are independent namespaces.
+        for obj in (row,label):
+            if isinstance(obj,dict) and 'label_schema_version' in obj:
+                source=obj['label_schema_version']
+                if type(source) is not int or source!=1:
+                    raise ValueError('label_schema_version is source contract integer 1; use task_label_schema_version for semantics')
+        if row.get('partition')=='measured_shadow' or (isinstance(label,dict) and label.get('label_source')=='measured_candidate_outcomes'):
+            raise ValueError('measured shadow cannot supply expert supervision or metrics')
         declarations=[obj['task_label_schema_version'] for obj in (row,label)
                       if isinstance(obj,dict) and 'task_label_schema_version' in obj]
         if selected==V2 and row.get('task_label_schema_version')!=V2:

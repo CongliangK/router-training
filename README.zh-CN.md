@@ -25,6 +25,13 @@ v2 服务加载前核对 run 与 calibration 的完整 schema 元数据。
 **#18 仍 OPEN**：六条真实 uncertain 证据复核、16 条 creative 盲审、真实新版本溯源、
 组支持与无泄漏验收仍不可用。本变更不代表训练/冒烟/模型加载授权。
 
+
+与待验收 #8 集成时来源 API 与任务语义分离：`label_schema_version` 仍为来源整数 1，
+`task_label_schema_version` 才是 router-label-v1/v2。v1 冻结/统一来源及专家 split-v2 保留；
+v2 仅支持旧切分算法的专家新目录，v2+统一/实测/prepare预检/split-v2 均在写入前拒绝。
+详见[完整支持矩阵](docs/LABEL-SCHEMA.md#composed-interface-matrix-8--18--24)。
+#8 候选仍是待独立二轮批准并合入上游的强依赖，不是已批准/main；集成 SHA 需全新完整红队。
+
 ## 为什么值得看
 
 模型本身不稀奇，稀奇的是周围的工程：
@@ -89,6 +96,26 @@ Bootstrap 从完整字段有效样本池按整个 `split_group` 重采样，包�
 **默认不启用阈值**，0.25 仅是未验证建议。按组开发流程仍不读取测试集，不能评估
 这个独立评估约束。真实候选任务成功证据仍由 #26 验收；frozen-v1/私有预测复核属于
 #27 的外部验收。合成 CPU 测试只证明指标行为，不代表真实模型改善或生产就绪。
+
+## 双来源标签与冷启动（issue #8）
+
+`prepare.py --outcomes <完整v2审计.json> --routes <候选routes.json>` 接收已过门禁的
+候选结果并与显式专家任务理解标签关联。train/calibration/test 仍仅含专家标签；
+measured 单独输出可追溯影子分区，保留 route 指纹及试验/门禁元数据，不从 outcome
+臆造任务理解字段。实测 confidence 是区间置信水平，绝不是专家样本权重。
+预留的每候选成功率字段当前为 null，不把 mock 结果拟成成功率头。
+加 `--preflight` 可仅用 stdlib 结构预检（无 torch/模型、不切分、不写文件）；
+`--unified` 也支持纯专家入口。这些 flag 适用默认/显式 `--split-version frozen-v1`；
+split-v2 与 `--unified`、`--outcomes`、`--routes`、`--preflight` 的任意组合均在
+读写之前明确报错，绝不忽略实测输入。`--output` 仅用于 split-v2。
+[支持的 flag 组合表](docs/DATA.md#cli-coexistence-unified-intake-vs-split-v2)。
+统一模式要求全新输出包；已有任意统一输出则所有 frozen-v1 模式（含预检/纯专家重跑）
+均拒绝。迁移或换语料/证据须新建目录仅复制输入，不自动删除数据。
+无统一输出时，默认专家模式仍覆盖五个普通输出文件。任意元数据须为有限数值 UTF-8 JSON，
+校验/序列化完成才写出（非崩溃、I/O 或并发事务）。
+[schema、精确覆盖策略与迁移详见 DATA](docs/DATA.md#output-lifecycle-and-migration)。
+既有专家切分及冻结 v3c 不变。真实 measured 供给与有效性仍由 #26 外部验收；
+合成 CPU 测试不是真实测量或生产资格证明。
 
 ## 目录结构
 
@@ -281,6 +308,33 @@ seed 20261010、accumulation 8、label smoothing 0.05、beta 0.999、`--fullft -
 ## 许可证
 
 代码与文档：**Apache-2.0**（见 [LICENSE](LICENSE)、[NOTICE](NOTICE)）。基座模型上游 Apache-2.0；再分发微调权重须继承其义务。真实任务数据不随仓库分发，故不在本许可覆盖范围内。
+
+### 显式启用 split-v2（CPU，issue #24）
+
+历史/默认 `prepare()` 算法和冻结产物保持不变。新增纯函数
+`prepare.split_v2(tasks, labels, ...)` 与新目录写入接口
+`prepare.prepare_v2(root, output, ...)`，均只需标准库：
+
+```sh
+CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void python prepare.py \
+  --split-version split-v2 --data /path/to/new-expert-inputs \
+  --output /path/to/nonexistent-split-v2-bundle
+```
+
+必须显式指定输入与全新输出目录，生成版本化 `*.split-v2.jsonl` 与
+`split-report.split-v2.json`；已有文件、目录、符号链接一律拒绝。
+根会话与跨根近重复连通分量（含传递关系）不可拆，每个选中切分最大单组占比
+**≤35%**，绝不降门槛。评分增加 vision=yes 比例与 task_type 分布惩罚；报告
+目标、实际比例/偏差、类支持量及描述性的 Kish 组大小集中度，**不是独立有效
+样本量或独立性证明**。Jaccard <.88 不证明语义/上下文独立；子会话/时间窗只作
+描述，不能据此拆根跨集。
+
+有证明的不可行返回 `infeasible`；有界启发式未找到候选返回
+`search_exhausted`，**不是不可行证明**。二者均仅写新诊断报告并退出 2，不输出
+放松约束的切分。权重、穷举/启发式预算与接口详见 [DATA.md](docs/DATA.md#opt-in-split-v2-cpu-development-issue-24)。
+**更换测试集后，指标不可与历史 frozen-v1 直接比较。** #24 仅做合成 CPU 开发，
+未执行真实重切、不保证真实视觉比例改善；新版本标签依赖 #18，真实分布、35%
+可行性及数据版本复核仍单列 #27 外部验收。训练输入路径不会自动切换。
 
 ### 冻结测试集删组敏感性（CPU，issue #4）
 
