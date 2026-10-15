@@ -31,6 +31,21 @@ are frozen history; new work happens under new run names.
 6. **Keep training/serve parity.** `model_utils.request_for` is the single
    truncation path shared by training and `server.py`; never fork it.
 
+## Development planning happens in GitHub Issues
+
+- All non-trivial development is planned and tracked in
+  <https://github.com/CongliangK/router-training/issues>; issues — not local
+  notes or chat transcripts — are the primary source of truth for roadmap and
+  priorities. Before substantial work, check existing issues and link the
+  relevant one; open a new issue rather than inventing a parallel local plan.
+- An issue should state: problem, scope/non-goals, acceptance criteria,
+  validation plan, dependencies, and priority. Link implementation PRs to the
+  issue and report validation evidence before marking work complete.
+- Public issues, comments, and PRs may contain only reviewed public
+  information: aggregate metrics and synthetic reproductions are fine; real
+  prompts, labels, prediction rows, personal paths, and raw private logs are
+  not.
+
 ## Where things are
 
 | Need | Look at |
