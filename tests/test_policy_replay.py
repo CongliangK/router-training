@@ -1,9 +1,10 @@
 """Pure synthetic policy/replay tests; no models, real data, or backend calls."""
 import copy,json,subprocess,sys,tempfile,unittest
 from pathlib import Path
+from unittest import mock
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from policy import DEFAULT_ROUTES,select,validate_routes
-from policy_replay import synthetic_rows,replay,study
+from policy_replay import synthetic_rows,replay,study,main
 from outcomes import route_fingerprint,import_outcomes
 
 
@@ -164,6 +165,119 @@ class PolicyReplayTests(unittest.TestCase):
         refused=replay(rows,[]);self.assertEqual(refused['refusal_rate'],1);self.assertEqual(refused['vision_refusal_rate'],1)
         self.assertEqual(sum(refused['upgrade_reason_counts'].values()),0)
         with self.assertRaises(ValueError):replay([{'prediction':prediction()}],DEFAULT_ROUTES)
+
+    def test_replay_configuration_matches_select_for_empty_nonempty_lists_generators(self):
+        invalid=[None,True,False,-1,2,float('nan'),float('inf'),-float('inf'),'0.35',{},[],10**1000]
+        options=[{'vision_policy':v} for v in [None,True,False,'unknown',{},[]]]
+        options.append({'vision_policy':'positive-v2'})
+        for value in invalid:
+            options.extend([{'minimum_confidence':value},
+                {'minimum_confidence':value,'vision_policy':'positive-v2','vision_positive_threshold':.35},
+                {'vision_policy':'positive-v2','vision_positive_threshold':value}])
+        options.extend({'vision_positive_threshold':v} for v in invalid if v is not None)
+        options.extend({'vision_positive_threshold':v} for v in [0,.35,1])
+        for config in options:
+            for routes in [DEFAULT_ROUTES,[]]:
+                with self.assertRaises(ValueError) as expected:select(prediction(),routes,**config)
+                for rows in [[],synthetic_rows()[:1]]:
+                    for iterable in [rows,(row for row in rows)]:
+                        with self.subTest(config=config,routes=bool(routes),empty=not rows,kind=type(iterable).__name__):
+                            with self.assertRaises(ValueError) as actual:replay(iterable,routes,**config)
+                            self.assertEqual(str(actual.exception),str(expected.exception))
+        # Invalid configuration must reject before even requesting the first row.
+        def unconsumable():
+            raise AssertionError('Invalid configuration consumed prediction input')
+            yield
+        for config in options:
+            with self.assertRaises(ValueError):replay(unconsumable(),DEFAULT_ROUTES,**config)
+
+    def test_valid_empty_replay_and_study_keep_null_denominators(self):
+        for config in [{},{'minimum_confidence':0},{'minimum_confidence':1}]+[
+                {'vision_policy':'positive-v2','vision_positive_threshold':t} for t in [0,.35,1]]:
+            for iterable in [[],iter(())]:
+                result=replay(iterable,DEFAULT_ROUTES,**config)
+                self.assertEqual(result['rows'],0)
+                for key in ['upgrades','refusals','vision_positive_labels','vision_false_negatives',
+                        'vision_refusals','selected_decisions','cost_supported_decisions']:
+                    self.assertEqual(result[key],0)
+                for key in ['upgrade_rate','refusal_rate','vision_false_negative_rate','vision_refusal_rate','estimated_total_cost']:
+                    self.assertIsNone(result[key])
+                for key in ['reason_rates','upgrade_reason_shares']:
+                    self.assertTrue(all(v is None for v in result[key].values()))
+                for key in ['reason_counts','upgrade_reason_counts']:
+                    self.assertTrue(all(v==0 for v in result[key].values()))
+                json.dumps(result,allow_nan=False)
+        for threshold in [None,0,.35,1]:
+            result=study(iter(()),DEFAULT_ROUTES,vision_positive_threshold=threshold)
+            self.assertIsNone(result['simulated_upgrade_rate_reduction'])
+            reports=[result['baseline'],result['simulated_balanced_vision'],*result['legacy_confidence_sensitivity']]
+            if threshold is None:self.assertIsNone(result['positive_threshold_experiment'])
+            else:reports.append(result['positive_threshold_experiment'])
+            for report in reports:
+                self.assertEqual(report['rows'],0);self.assertIsNone(report['upgrade_rate'])
+            json.dumps(result,allow_nan=False)
+
+    def test_study_rejects_invalid_experiment_before_consuming_rows(self):
+        for threshold in [True,False,-1,2,float('nan'),float('inf'),-float('inf'),'0.35',{},[],10**1000]:
+            for rows in [[],synthetic_rows()[:1]]:
+                for iterable in [rows,(row for row in rows)]:
+                    with self.subTest(threshold=threshold,empty=not rows,kind=type(iterable).__name__):
+                        with self.assertRaises(ValueError):study(iterable,DEFAULT_ROUTES,vision_positive_threshold=threshold)
+            def unconsumable():
+                raise AssertionError('Invalid experiment consumed prediction input')
+                yield
+            with self.assertRaises(ValueError):study(unconsumable(),DEFAULT_ROUTES,vision_positive_threshold=threshold)
+
+    def test_cli_invalid_thresholds_leave_no_output_for_empty_and_nonempty_input(self):
+        root=Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            source=Path(directory)/'input.jsonl'
+            for rows in [[],synthetic_rows()[:1]]:
+                source.write_text('\n'.join(json.dumps(r) for r in rows),encoding='utf-8')
+                for threshold in ['-1','2','nan','inf','-inf','true','null']:
+                    with self.subTest(empty=not rows,threshold=threshold):
+                        output=Path(directory)/f'aggregate-{len(rows)}-{threshold}.json'
+                        command=[sys.executable,str(root/'policy_replay.py'),'--input',str(source),
+                            '--vision-positive-threshold='+threshold,'--output',str(output)]
+                        run=subprocess.run(command,capture_output=True,text=True)
+                        self.assertNotEqual(run.returncode,0);self.assertFalse(output.exists())
+                        self.assertNotIn('Policy replay complete',run.stdout)
+
+    def test_cli_serialization_failures_do_not_reserve_output_or_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent=Path(directory);sentinel=parent/'sentinel';sentinel.write_bytes(b'unchanged')
+            for index,value in enumerate([float('nan'),float('inf'),-float('inf'),{'unsupported'}]):
+                fresh=parent/f'new-{index}.json'
+                for output in [fresh,sentinel]:
+                    with self.subTest(value=value,existing=output==sentinel),mock.patch('sys.argv',
+                            ['policy_replay.py','--synthetic','--output',str(output)]),mock.patch(
+                            'policy_replay.study',return_value={'nested':[{'bad':value}]}):
+                        with self.assertRaises((ValueError,TypeError)):main()
+                        self.assertFalse(fresh.exists());self.assertEqual(sentinel.read_bytes(),b'unchanged')
+
+    def test_cli_valid_empty_reports_and_exclusive_filesystem_boundaries(self):
+        root=Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            parent=Path(directory);source=parent/'empty.jsonl';source.write_bytes(b'')
+            command=[sys.executable,str(root/'policy_replay.py'),'--input',str(source)]
+            for index,args in enumerate([[],['--vision-positive-threshold','0'],
+                    ['--vision-positive-threshold','.35'],['--vision-positive-threshold','1']]):
+                output=parent/f'valid-{index}.json'
+                run=subprocess.run([*command,*args,'--output',str(output)],capture_output=True,text=True)
+                self.assertEqual(run.returncode,0,run.stderr)
+                result=json.loads(output.read_bytes().decode('utf-8'))
+                self.assertEqual(result['baseline']['rows'],0);self.assertIsNone(result['baseline']['upgrade_rate'])
+            sentinel=parent/'sentinel';sentinel.write_bytes(b'unchanged')
+            folder=parent/'folder';folder.mkdir()
+            link=parent/'link';link.symlink_to(sentinel)
+            dangling=parent/'dangling';missing=parent/'missing';dangling.symlink_to(missing)
+            for output in [source,parent/'valid-0.json',sentinel,folder,link,dangling]:
+                before=output.read_bytes() if output.is_file() else None
+                run=subprocess.run([*command,'--output',str(output)],capture_output=True,text=True)
+                self.assertNotEqual(run.returncode,0);self.assertNotIn('Policy replay complete',run.stdout)
+                if before is not None:self.assertEqual(output.read_bytes(),before)
+            self.assertTrue(folder.is_dir());self.assertTrue(link.is_symlink());self.assertTrue(dangling.is_symlink())
+            self.assertFalse(missing.exists());self.assertEqual(sentinel.read_bytes(),b'unchanged')
 
     def test_cli_synthetic_and_local_inputs_aggregate_only_no_overwrite(self):
         root=Path(__file__).resolve().parents[1]
