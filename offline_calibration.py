@@ -104,6 +104,18 @@ def _weights(rows):
     return [1 / (len(counts) * counts[r['split_group']]) for r in rows]
 
 
+def _group_units(rows):
+    """Integer row masses with one common denominator for group-equal error.
+
+    Float accumulation can make equal errors differ and defeat canonical ties
+    (red team F1). Integer updates preserve equality AND arbitrarily close strict
+    ordering, without an epsilon that would merge genuinely unequal objectives.
+    """
+    counts = collections.Counter(r['split_group'] for r in rows)
+    scale = math.lcm(*counts.values())
+    return [scale // counts[r['split_group']] for r in rows], len(counts) * scale
+
+
 def _rates(matrix):
     flag_tp = matrix[2][2]
     flag_true = sum(matrix[2])
@@ -137,17 +149,21 @@ def choose_thresholds(rows, probs, protocol):
     if not supported(rows, protocol, fitting=True):
         return None
     weights = _weights(rows)
+    units, total_units = _group_units(rows)
     truth = [TIERS.index(r['label']) for r in rows]
     best = None
     sentinel = math.nextafter(1., math.inf)
     flag_candidates = sorted({0., sentinel, *(p[2] for p in probs)})
     for theta_flag in flag_candidates:
         matrix = [[0.] * 3 for _ in TIERS]
+        correct_units = 0
         flag_groups = set()
         remaining = []
         for i, (row, p) in enumerate(zip(rows, probs)):
             flag = p[2] >= theta_flag
             matrix[truth[i]][2 if flag else 1] += weights[i]
+            if truth[i] == (2 if flag else 1):
+                correct_units += units[i]
             if flag:
                 flag_groups.add(row['split_group'])
             else:
@@ -163,14 +179,16 @@ def choose_thresholds(rows, probs, protocol):
             for i in by_fast[theta_fast]:
                 matrix[truth[i]][1] -= weights[i]
                 matrix[truth[i]][0] += weights[i]
+                correct_units += units[i] * ((truth[i] == 0) - (truth[i] == 1))
                 fast_groups.add(rows[i]['split_group'])
             if len(fast_groups) < protocol['min_predicted_groups']:
                 continue
             rates = _rates(matrix)
             if not _constraints(rates, protocol, fast=True):
                 continue
-            error = max(0., 1 - sum(matrix[i][i] for i in range(3)))
-            key = (error, theta_flag, theta_fast)
+            # Every candidate has denominator total_units: compare numerators,
+            # not rounded errors. Float rates/gates above remain unchanged.
+            key = (total_units - correct_units, theta_flag, theta_fast)
             if best is None or key < best[0]:
                 best = (key, {'theta_flag': theta_flag, 'theta_fast': theta_fast})
     return None if best is None else best[1]
@@ -286,7 +304,7 @@ def select_outer_training(left, right, protocol):
     Inner validation groups never fit T or either threshold. After choosing
     alpha, refit T/thresholds on outer training only. These fits are NOT scores.
     """
-    candidates = []
+    candidates, errors = [], {}
     for alpha in sorted(protocol['alpha_grid']):
         rows = _ensemble(left, right, alpha)
         oof = []
@@ -300,6 +318,9 @@ def select_outer_training(left, right, protocol):
                           'fit_rows': len(train), 'validation_groups': 1, 'validation_rows': len(valid)})
         complete = len(oof) == len(rows)
         summary = summarize(oof) if complete else None
+        if complete:
+            units, total_units = _group_units(oof)
+            errors[alpha] = Fraction(sum(u for r, u in zip(oof, units) if r['label'] != r['prediction']), total_units)
         feasible = complete and supported(oof, protocol) and _constraints(summary['group_equal'], protocol, fast=True)
         # Require >=2 groups supporting both predicted decisions in inner OOF.
         feasible = feasible and all(len({r['split_group'] for r in oof if r['prediction'] == c})
@@ -309,7 +330,7 @@ def select_outer_training(left, right, protocol):
     feasible = [c for c in candidates if c['feasible']]
     if not feasible:
         return None, candidates
-    chosen = min(feasible, key=lambda c: (c['inner_oof']['group_equal']['error'],
+    chosen = min(feasible, key=lambda c: (errors[c['alpha']],
                                          c['inner_oof']['group_equal']['nll'], c['alpha']))
     fit = _fit(_ensemble(left, right, chosen['alpha']), protocol)
     return (None if fit is None else {'alpha': chosen['alpha'], **fit}), candidates

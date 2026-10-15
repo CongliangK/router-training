@@ -1,7 +1,7 @@
 """Issues #1/#22: invented logits only; no models loaded or private IO."""
+import collections
 import copy
 from fractions import Fraction
-import itertools
 import json
 import math
 from pathlib import Path
@@ -157,6 +157,72 @@ class ContractTests(unittest.TestCase):
             self.assertFalse((Path(d) / 'bad.json').exists())
 
 
+def threshold_options(rows, probs, protocol):
+    """Independent per-row Fraction oracle: complete canonical pairs, not near errors.
+
+    Do not reuse implementation weights, summaries, rates, constraints or units.
+    The existing machine-scale gate allowance is not an objective tie tolerance.
+    """
+    counts = collections.Counter(r['split_group'] for r in rows)
+    options = []
+    for tf in sorted({0., math.nextafter(1., math.inf), *(v[2] for v in probs)}):
+        for tx in sorted({v[0] for v in probs if v[2] < tf}):
+            matrix = [[Fraction() for _ in TIERS] for _ in TIERS]
+            groups = {0: set(), 2: set()}
+            for row, v in zip(rows, probs):
+                pred = 2 if v[2] >= tf else 0 if v[0] >= tx else 1
+                matrix[TIERS.index(row['label'])][pred] += Fraction(1, len(counts)*counts[row['split_group']])
+                if pred in groups:groups[pred].add(row['split_group'])
+            if min(map(len, groups.values())) < protocol['min_predicted_groups']:continue
+            true_flag, nonflag = sum(matrix[2]), sum(map(sum, matrix[:2]))
+            fast = sum(row[0] for row in matrix)
+            if not true_flag or not nonflag or not fast:continue
+            rec = float(matrix[2][2] / true_flag)
+            fpr = float((matrix[0][2]+matrix[1][2]) / nonflag)
+            prec = float(matrix[0][0] / fast)
+            if rec+1e-12 < protocol['min_flagship_recall'] or fpr > protocol['max_flagship_fpr']+1e-12 \
+                    or prec+1e-12 < protocol['min_fast_precision']:continue
+            options.append((1-sum(matrix[i][i] for i in range(3)), tf, tx))
+    return sorted(options)
+
+
+def threshold_witness():
+    # Round2 F1: actual fitting formerly selected the higher flagship breakpoint
+    # despite both errors being exactly 1/3. Ordinary probabilities, four groups.
+    probs = [[.45251396648044695, .3575418994413408, .18994413407821228],
+             [.4393939393939394, .25757575757575757, .30303030303030304],
+             [.5469613259668509, .2596685082872928, .19337016574585636],
+             [.14942528735632185, .5747126436781609, .27586206896551724],
+             [.295, .33, .375], [.33783783783783783, .24324324324324326, .4189189189189189],
+             [.31125827814569534, .4304635761589404, .2582781456953642],
+             [.5714285714285714, .041666666666666664, .3869047619047619],
+             [.24890829694323144, .31877729257641924, .43231441048034935],
+             [.19047619047619047, .48214285714285715, .3273809523809524],
+             [.10784313725490197, .5490196078431373, .3431372549019608],
+             [.234375, .109375, .65625]]
+    src = source(4)
+    for row, v in zip(src['rows'], probs):row['logits'] = [math.log(x) for x in v]
+    p = wise_protocol()
+    p.update(alpha_grid=[0.], temperature_bounds=[1., 1.0000000001], fit_iterations=35,
+             fit_tolerance=1e-6, min_flagship_recall=.2, max_flagship_fpr=.9, min_fast_precision=.2)
+    return src, probs, p
+
+
+def close_error_fixture(sizes, changes):
+    # Lowering the fast threshold moves |d| rows per group, changing error by
+    # sum(d/n)/G. Fixed anchors ensure genuine predicted/class group support.
+    rows, probs = [], []
+    for g, (n, d) in enumerate(zip(sizes, changes)):
+        group = [('fast', [.8, .15, .05]), ('flagship', [.05, .15, .8])]
+        group += [('balanced' if d > 0 else 'fast', [.4, .5, .1])] * abs(d)
+        group += [('balanced', [.1, .85, .05])] * (n-len(group))
+        for label, v in group:
+            rows.append({'label': label, 'split_group': str(g)})
+            probs.append(v)
+    p = wise_protocol();p.update(min_flagship_recall=1., max_flagship_fpr=0., min_fast_precision=.01)
+    return rows, probs, p
+
+
 class ThresholdTests(unittest.TestCase):
     def test_continuous_breakpoints_and_flagship_overlap_priority(self):
         rows = source(4)['rows'];p = wise_protocol()
@@ -174,18 +240,90 @@ class ThresholdTests(unittest.TestCase):
         rows = source(4)['rows'];p = wise_protocol()
         probs = [oc.probabilities(r['logits'], 2) for r in rows]
         result = oc.choose_thresholds(rows, probs, p)
-        candidates = []
-        for tf, tx in itertools.product(sorted({0., math.nextafter(1., math.inf), *(v[2] for v in probs)}),
-                                       sorted({0., math.nextafter(1., math.inf), *(v[0] for v in probs)})):
-            predicted = [{**r, 'probabilities': v, 'prediction': 'flagship' if v[2] >= tf else 'fast' if v[0] >= tx else 'balanced'}
-                         for r, v in zip(rows, probs)]
-            m = oc.summarize(predicted)['group_equal']
-            if oc._constraints(m, p, fast=True) and all(len({r['split_group'] for r in predicted if r['prediction'] == c}) >= 2
-                                                      for c in ('fast', 'flagship')):
-                candidates.append(m['error'])
-        selected = [{**r, 'probabilities': v, 'prediction': 'flagship' if v[2] >= result['theta_flag'] else
-                     'fast' if v[0] >= result['theta_fast'] else 'balanced'} for r, v in zip(rows, probs)]
-        self.assertAlmostEqual(oc.summarize(selected)['group_equal']['error'], min(candidates))
+        best = threshold_options(rows, probs, p)[0]
+        self.assertEqual((result['theta_flag'], result['theta_fast']), best[1:])
+
+    def test_fitted_round2_witness_outer_selection_and_unseen_partition(self):
+        src, _, p = threshold_witness()
+        rows = validate_source(src);oc.validate_wise_protocol(p)
+        fit = oc._fit(rows, p)  # Real temperature fitting; no fabricated fit result.
+        self.assertEqual(fit['temperature'], 1.00000000005)
+        probs = [oc.probabilities(r['logits'], fit['temperature']) for r in rows]
+        best = threshold_options(rows, probs, p)[0]
+        self.assertEqual(best, (Fraction(1, 3), .3749999999978818, .1494252873633696))
+        self.assertEqual((fit['theta_flag'], fit['theta_fast']), best[1:])
+        rejected = next(o for o in threshold_options(rows, probs, p)
+                        if o[1:] == (.3869047619072764, best[2]))
+        self.assertEqual(rejected[0], best[0])
+        selection, candidates = oc.select_outer_training(rows, rows, p)
+        self.assertTrue(candidates[0]['feasible'])
+        self.assertEqual(selection, {'alpha': 0., **fit})
+        holdp = [.3, .31904761904742085, .3809523809525791]
+        hold = {'id': 'unseen', 'split_group': 'unseen-group', 'label': 'flagship',
+                'logits': [math.log(v)*fit['temperature'] for v in holdp]}
+        self.assertNotIn(hold['split_group'], {r['split_group'] for r in rows})
+        self.assertEqual(oc.predict([hold], fit['temperature'], fit)[0]['prediction'], 'flagship')
+        wrong = dict(theta_flag=rejected[1], theta_fast=rejected[2])
+        self.assertEqual(oc.predict([hold], fit['temperature'], wrong)[0]['prediction'], 'fast')
+
+    def test_exact_pair_invariant_to_order_and_unequal_group_replication(self):
+        src, probs, p = threshold_witness();rows = src['rows']
+        baseline = oc.choose_thresholds(rows, probs, p)
+        rng = random.Random(2202)
+        for factors in ([1, 1, 1, 1], [7, 1, 3, 11], [2, 5, 1, 1]):
+            pairs = [(dict(r), list(v)) for r, v in zip(rows, probs)
+                     for _ in range(factors[int(r['split_group'].rsplit('-', 1)[1])])]
+            for reverse in (False, True):
+                rng.shuffle(pairs)
+                if reverse:pairs.reverse()
+                rr, pp = map(list, zip(*pairs))
+                expected = threshold_options(rr, pp, p)[0]
+                actual = oc.choose_thresholds(rr, pp, p)
+                self.assertEqual((actual['theta_flag'], actual['theta_fast']), expected[1:])
+                self.assertEqual(actual, baseline)
+
+    def test_seeded_imbalanced_group_exact_candidate_pairs(self):
+        rng = random.Random(220143)
+        for trial in range(60):
+            rows, probs = [], []
+            for g in range(4):
+                for label in list(TIERS) + [rng.choice(TIERS) for _ in range(rng.randrange(5))]:
+                    rows.append({'label': label, 'split_group': str(g)})
+                    v = [rng.randrange(1, 20) for _ in TIERS]
+                    probs.append([x/sum(v) for x in v])
+            p = wise_protocol();p.update(min_flagship_recall=.2, max_flagship_fpr=.9, min_fast_precision=.2)
+            options = threshold_options(rows, probs, p)
+            actual = oc.choose_thresholds(rows, probs, p)
+            with self.subTest(trial=trial):
+                if not options:self.assertIsNone(actual)
+                else:self.assertEqual((actual['theta_flag'], actual['theta_fast']), options[0][1:])
+
+    def test_truly_unequal_errors_below_epsilon_are_not_ties(self):
+        # Bezout witnesses below gate epsilon and even below one binary64 ulp.
+        # Four distinct probability vectors keep these actual searches small.
+        cases = [([31, 37, 41, 43, 47, 53, 59, 61], [-11, -1, 23, -5, -4, -23, -5, 33]),
+                 ([31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79],
+                  [-3, 6, 13, -8, -4, -12, -17, -1, 33, 7, -31, 20])]
+        for sizes, changes in cases:
+            rows, probs, p = close_error_fixture(sizes, changes)
+            options = threshold_options(rows, probs, p)
+            best = options[0]
+            lower = next(o for o in options if o[1:] == (.8, .4))
+            self.assertEqual(lower[0]-best[0], Fraction(1, len(sizes)*math.prod(sizes)))
+            self.assertLess(lower[0]-best[0], Fraction(1, 10**12))
+            if len(sizes) == 12:self.assertEqual(float(lower[0]), float(best[0]))
+            self.assertEqual(best[1:], (.8, .8))
+            actual = oc.choose_thresholds(rows, probs, p)
+            self.assertEqual((actual['theta_flag'], actual['theta_fast']), best[1:])
+
+    def test_exact_tie_uses_smaller_fast_threshold(self):
+        rows, probs, p = close_error_fixture([7, 7, 7, 7], [-1, 1, -1, 1])
+        options = threshold_options(rows, probs, p)
+        self.assertEqual(options[0][1:], (.8, .4))
+        higher = next(o for o in options if o[1:] == (.8, .8))
+        self.assertEqual(options[0][0], higher[0])
+        actual = oc.choose_thresholds(rows, probs, p)
+        self.assertEqual((actual['theta_flag'], actual['theta_fast']), options[0][1:])
 
     def test_no_feasible_thresholds_never_relaxes_constraints(self):
         rows = source(4)['rows'];p = wise_protocol()
@@ -228,6 +366,35 @@ class NestedTests(unittest.TestCase):
         for r in a['rows']:
             self.assertNotIn(r['id'], serialized);self.assertNotIn(r['split_group'], serialized)
         self.assertNotIn('logits', serialized)
+
+    def test_alpha_error_order_matches_independent_oof_fractions(self):
+        rng = random.Random(1228);feasible_trials = 0
+        for _ in range(8):
+            a, b = source(), source()
+            for src in (a, b):
+                for row in src['rows']:row['logits'] = [rng.uniform(-2, 2) for _ in TIERS]
+            p = wise_protocol();p.update(min_flagship_recall=.2, max_flagship_fpr=.9, min_fast_precision=.2)
+            pools = []
+            original = oc.summarize
+            def record(rows):
+                pools.append(copy.deepcopy(rows))
+                return original(rows)
+            with mock.patch.object(oc, 'summarize', side_effect=record):
+                selected, candidates = oc.select_outer_training(a['rows'], b['rows'], p)
+            keys = []
+            complete = [c for c in candidates if c['inner_oof'] is not None]
+            self.assertEqual(len(complete), len(pools))
+            for candidate, rows in zip(complete, pools):
+                if not candidate['feasible']:continue
+                counts = collections.Counter(r['split_group'] for r in rows)
+                error = sum(Fraction(1, len(counts)*counts[r['split_group']])
+                            for r in rows if r['prediction'] != r['label'])
+                keys.append((error, candidate['inner_oof']['group_equal']['nll'], candidate['alpha']))
+            if keys:
+                feasible_trials += 1
+                self.assertEqual(selected['alpha'], min(keys)[2])
+            else:self.assertIsNone(selected)
+        self.assertGreater(feasible_trials, 0)
 
     def test_outer_labels_cannot_change_its_selection(self):
         a, b = source(5, weak=True), source()

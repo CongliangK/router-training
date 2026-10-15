@@ -131,11 +131,15 @@ For **each outer held-out group**:
    fast precision, and distinct predicted fast/flagship group minima. Ties use
    smaller flagship then fast threshold. Empty fast/flagship decisions fail
    support, rather than creating undefined precision or a trivial all-balanced
-   fallback. Exactness is over finite empirical partitions, not population risk.
+   fallback. Error ordering uses exact integer group-equal masses, not rounded
+   floating-point errors or an objective tie tolerance; genuinely unequal errors
+   remain ordered even below one floating-point ulp. Exactness is over finite
+   empirical partitions, not population risk.
 4. Score each inner-validation group with that fitted T/threshold pair. An alpha
    is eligible only if all inner fits succeeded and the complete inner OOF pool
    meets the registered constraints/support. Choose alpha by group-equal inner
-   OOF error, then group-equal NLL, then smaller alpha.
+   OOF error (also ordered exactly), then group-equal NLL, then smaller alpha.
+   Reported metrics remain ordinary floating-point values; no gate is relaxed.
 5. Refit T and thresholds for that chosen alpha on **outer training only**.
    Apply the locked parameters once to the outer held-out group. Report fitting
    parameters, but **never describe fitted training metrics as generalization**.
