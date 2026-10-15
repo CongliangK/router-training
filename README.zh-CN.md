@@ -270,6 +270,25 @@ GitHub Actions 在 push 和 pull request 时执行这一 CPU 检查；CPU runner
 
 输出摘要只含计数（不含组名、id、标签或 prompt）。**现状**：归档校准池无法满足示例门（约 8 个组、部分类集中在极少数组——见 issue #2），现有数据无法实例化任何分组 run；门槛不为迁就数据放宽，需要补按组隔离的开发数据。训练的完整 dev-no-test 与获批数值协议尚未满足——本仓库不声称已具备训练前置条件。
 
+### 离线 tau / 嵌套 logit 校准（issue #1 / #22）
+
+新增可选纯 CPU/标准库研究工具，共用严格对齐的**原始 tier-logit** 契约：
+[wise_ft_calibrate.py](scripts/wise_ft_calibrate.py) 用嵌套 LOGO 选择
+alpha/T/连续双阈值，所有选择均排除当前外折整组标签，内折验证组也不参与 T/阈值拟合。
+[tau_ablation.py](scripts/tau_ablation.py) 在预注册固定 T 下扫描
+0/0.5/1/1.5/2，强制显式训练 prior 和版本化相对成本表，报告按组配对不确定性与支持度。
+成本均值以精确计数/有理数权重累积，最终仅舍入一次到 binary64；即使未选路由成本极大，
+也保留有限可表示的正数及次正规数支出，不加 epsilon、不伪造零成本。
+支持不足/约束无解即不可行，不放宽门槛，不把同池拟合称为泛化，不用 test 选参，
+不产出服务配置。现有训练/run/策略行为不变。
+
+公开 fixture **仅限纯合成**，不得复制私有原始 logits 到此目录。此处是
+**logit 集成，不是 WiSE-FT 权重插值**，可选权重 soup 暂不实施。真实私有回放、
+研究指标目标及 #1 的训练侧因果消融仍不可用，不代表已验收或关闭 issue。
+详见[输入与协议](docs/OFFLINE-CALIBRATION.md)及
+[tau 协议/不可用结果模板](research/tau-ablation.md)。历史反复查看的 frozen-v1
+不能因新预注册恢复 pristine holdout；不声称真实数值改善或统计保证。
+
 ### 训练可复现性修复（issue #14）
 
 审计确认的四个缺陷已为**未来 run** 修复；归档 v3c 产物是冻结历史，不改动：
@@ -383,6 +402,7 @@ seed 20261010、accumulation 8、label smoothing 0.05、beta 0.999、`--fullft -
 3. 校准集按随机行分为 selection/fitting 两半，未再按组隔离（组会跨半泄漏，issue #2）；bootstrap 是实现层面重采样，不是真实任务成功证据。该行为仅在显式 `--legacy-calibration` 下原样保留，新 run 默认按组隔离（见上节）。
 4. 无 optimizer resume，中断需重跑；相同参数不保证跨 GPU/依赖版本逐位一致。
 5. 尚无任何真实候选执行数据：`outcomes.py`（issue #7）只用纯合成 fixture 定义并 CPU 验证导入管线，不声称真实成功率、成本节省或生产收益。
+6. #1/#22 的离线 tau/嵌套 LOGO 工具及[协议与不可用结果模板](research/tau-ablation.md)仅为新增 CPU 复现入口；未重新评估归档结果，未改冻结权重/产物，真实私有 logits 回放和 #19 因果训练另行验收。
 
 ## 许可证
 
