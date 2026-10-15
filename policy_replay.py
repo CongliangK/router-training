@@ -2,7 +2,7 @@
 from __future__ import annotations
 import argparse,json,math
 from pathlib import Path
-from policy import DEFAULT_ROUTES,TIERS,select,validate_routes
+from policy import DEFAULT_ROUTES,TIERS,select,validate_policy,validate_routes
 
 CATEGORIES=('model_choice','vision_forced','context_truncation','risk_policy')
 
@@ -20,6 +20,8 @@ def synthetic_rows():
 
 
 def replay(rows,routes,minimum_confidence=.9,*,vision_policy='legacy-v1',vision_positive_threshold=None,costs=None):
+    # Empty evidence still requires the exact configuration contract used by select.
+    validate_policy(minimum_confidence,vision_policy,vision_positive_threshold)
     if routes!=[]:validate_routes(routes)
     # Cost inputs are explicit per-decision estimates, not tier-distance or measured savings.
     cost_index={}
@@ -59,6 +61,8 @@ def replay(rows,routes,minimum_confidence=.9,*,vision_policy='legacy-v1',vision_
 
 
 def study(rows,routes,*,input_kind='local-unverified',vision_positive_threshold=None,costs=None):
+    if vision_positive_threshold is not None:
+        validate_policy(vision_policy='positive-v2',vision_positive_threshold=vision_positive_threshold)
     rows=list(rows)
     baseline=replay(rows,routes,costs=costs)
     # Simulation changes capabilities only in memory. It authorizes no real candidate.
@@ -85,8 +89,10 @@ def main():
     routes=json.loads(a.routes.read_text()) if a.routes else DEFAULT_ROUTES
     costs=json.loads(a.costs.read_text()) if a.costs else None
     result=study(rows,routes,input_kind='synthetic' if a.synthetic else 'local-unverified',vision_positive_threshold=a.vision_positive_threshold,costs=costs)
+    # Serialize and encode before reserving a name: expected failures leave no empty output.
+    payload=(json.dumps(result,indent=2,allow_nan=False)+'\n').encode('utf-8')
     # Refuse overwrites and never echo paths, prompts, IDs, or prediction rows.
-    with a.output.open('x') as file:file.write(json.dumps(result,indent=2,allow_nan=False)+'\n')
+    with a.output.open('xb') as file:file.write(payload)
     print('Policy replay complete; aggregate-only output written. No model or backend executed.')
 
 
