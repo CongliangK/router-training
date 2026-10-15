@@ -440,3 +440,16 @@ Code and documentation: **Apache-2.0** (see [LICENSE](LICENSE), [NOTICE](NOTICE)
 The base model is upstream Apache-2.0; redistributed fine-tuned checkpoints inherit
 its obligations. Real task data is not covered by this license because it is not
 distributed.
+
+### Frozen-test sensitivity (CPU, issue #4)
+
+New reports label the historical test set **frozen-v1, known skew** and append
+`frozen_test_diagnostics`. Run `python scripts/report_split.py --split-report
+ data/split-report.json` for aggregate counts; add `--predictions <fixed-test.jsonl>`
+for observed group support, bootstrap, and fixed-prediction group deletion.
+No predictions means unavailable metrics. This is no-retraining sensitivity,
+not cross-validation or evidence of independent model quality; vision is
+mainly supported by one historical task group. Never tune on frozen-v1.
+The CLI uses only the standard library, exports aggregate aliases, and refuses
+output overwrite. See [DATA.md](docs/DATA.md#frozen-v1-known-skew--已知偏斜)
+for the input contract and limits. Real replay remains #27.
