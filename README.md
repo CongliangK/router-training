@@ -143,6 +143,37 @@ evidence remains required (#26); frozen-v1/private prediction verification is
 external acceptance (#27). Synthetic CPU tests establish metric behavior, not
 real model improvement or production readiness.
 
+## Versioned routing policy and replay (issues #6 / #23)
+
+The conservative `legacy-v1` vision policy remains the default; no real candidate
+capabilities change. Explicit opt-in `positive-v2` requires a separately supplied
+`vision_positive_threshold` (`--vision-policy positive-v2 --vision-positive-threshold
+<value>` in the server). No calibrated production threshold is supplied. Images
+always require vision; missing/invalid probabilities fail closed. Recommendations
+now include versioned structured reasons and model/required/selected tiers, including
+refusals, without weakening shadow/execution gates. Declared optional identity/effort
+metadata passes through unchanged; it does **not** mean backend effort was executed.
+
+```sh
+CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void python policy_replay.py \
+  --synthetic --output /tmp/policy-synthetic.json
+```
+
+The CPU-only replay supports authorized local JSONL via `--input`, threshold
+sensitivity, simulated balanced-vision candidates, vision FN/refusal rates and
+optional explicit cost estimates. Synthetic results are not actual replay, real
+savings, or candidate capability evidence. Private inputs/outputs stay local and
+outside public checkouts; #27 retains real replay/capability/risk acceptance.
+See [policy contract and replay input schema](docs/POLICY-REPLAY.md).
+
+The #18 server composition now includes #6/#23 (superseding the earlier pending
+integration notes in the label-schema document). `create_app` accepts independent
+keyword-only `label_schema`, `vision_policy`, and `vision_positive_threshold`;
+the server CLI forwards all three. Either task schema works with either vision
+policy; defaults remain seven-task v1 and conservative legacy vision. Complete v2
+run/calibration identity is still checked before backend loading. This integration
+needs a fresh full independent review of its final SHA; no prior approval transfers.
+
 ## Unified label intake and cold start (issue #8)
 
 `prepare.py --outcomes <full-v2-audit.json> --routes <candidate-routes.json>`

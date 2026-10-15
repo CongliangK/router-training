@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel,Field,ConfigDict
 import uvicorn
 from model_utils import ROOT,load_engine,score
-from policy import select,DEFAULT_ROUTES,validate_routes
+from policy import select,DEFAULT_ROUTES,validate_routes,validate_policy
 from extract import redact
 from task_label_schema import LEGACY, VERSIONS, version, resolve_run_schema
 
@@ -35,11 +35,11 @@ def record_observation(record):
     with (observations/'decisions.jsonl').open('a') as file:file.write(json.dumps(record,ensure_ascii=False)+'\n')
 
 
-def create_app(run='real-history-v1',routes=None,minimum_confidence=.9,collect_prompts=False,mode='diagnostic',label_schema=LEGACY):
+def create_app(run='real-history-v1',routes=None,minimum_confidence=.9,collect_prompts=False,mode='diagnostic',*,label_schema=LEGACY,vision_policy='legacy-v1',vision_positive_threshold=None):
     selected=version(label_schema)
     artifacts=ROOT/'artifacts'/run;state={};lock=threading.Lock()
     routes=validate_routes(routes if routes is not None else DEFAULT_ROUTES)
-    if not 0<=minimum_confidence<=1:raise ValueError('Invalid minimum confidence')
+    validate_policy(minimum_confidence,vision_policy,vision_positive_threshold)
     if mode not in ('diagnostic','execution'):raise ValueError('Invalid service mode')
     def contract(recommendation_available=True):
         gate=state.get('gate',{'passed':False,'mode':'shadow','status':'not-loaded'})
@@ -78,16 +78,15 @@ def create_app(run='real-history-v1',routes=None,minimum_confidence=.9,collect_p
         start=time.perf_counter()
         with lock:
             prediction=score(state['engine'],request.prompt,state['temperatures'],state.get('adjustments'))
-            decision=select(prediction,routes or DEFAULT_ROUTES,request.has_image,minimum_confidence)
+            decision=select(prediction,routes,request.has_image,minimum_confidence,vision_policy=vision_policy,vision_positive_threshold=vision_positive_threshold)
             permission=contract(decision['recommendation'] is not None)
             if mode=='execution' and not permission['execution_allowed']:
-                raise HTTPException(503,{'reason':'no-authorized-recommendation',**permission,'reasons':decision['reasons']})
+                raise HTTPException(503,{'reason':'no-authorized-recommendation',**permission,**decision})
             if decision['recommendation'] is not None:
                 decision['recommendation']={**decision['recommendation'],
                     'execution_allowed':permission['execution_allowed'],'advisory_only':permission['advisory_only']}
             result={**permission,'run':run,
                 'tier':prediction['answers']['tier']['choice'],'tier_confidence':prediction['answers']['tier']['confidence'],
-                'vision_probability':prediction['answers']['vision']['probabilities']['yes'],
                 'task_type':prediction['answers']['task_type']['choice'],
                 'task_type_confidence':prediction['answers']['task_type']['confidence'],
                 'context_truncated':prediction['context_truncated'],
@@ -101,8 +100,9 @@ def create_app(run='real-history-v1',routes=None,minimum_confidence=.9,collect_p
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--run',default='real-history-v1');p.add_argument('--port',type=int,default=19948);p.add_argument('--collect-prompts',action='store_true');p.add_argument('--routes',type=Path);p.add_argument('--minimum-confidence',type=float,default=.9);p.add_argument('--mode',choices=['diagnostic','execution'],default='diagnostic')
     p.add_argument('--label-schema',choices=VERSIONS,default=LEGACY,help='Explicit checkpoint label/question schema; default preserves seven-task legacy')
+    p.add_argument('--vision-policy',choices=['legacy-v1','positive-v2'],default='legacy-v1');p.add_argument('--vision-positive-threshold',type=float)
     args=p.parse_args()
     if not args.run.replace('-','').replace('_','').isalnum():raise SystemExit('Invalid run name')
     if not 0<=args.minimum_confidence<=1:raise SystemExit('Invalid confidence threshold')
     routes=json.loads(args.routes.read_text()) if args.routes else DEFAULT_ROUTES
-    uvicorn.run(create_app(args.run,routes,args.minimum_confidence,args.collect_prompts,args.mode,args.label_schema),host='127.0.0.1',port=args.port,log_level='info')
+    uvicorn.run(create_app(args.run,routes,args.minimum_confidence,args.collect_prompts,args.mode,label_schema=args.label_schema,vision_policy=args.vision_policy,vision_positive_threshold=args.vision_positive_threshold),host='127.0.0.1',port=args.port,log_level='info')
