@@ -12,6 +12,36 @@ flagship), `needs_vision` (yes / no), and `task_type` (7 classes) — which a ca
 map onto concrete model routes. The router never generates task answers; it only
 scores fixed decision options from the model's logits.
 
+## Opt-in six-task labels (#18; public CPU subset)
+
+Default/unversioned checkpoints still use the **unchanged seven-type v1 questions**.
+Explicit `--label-schema router-label-v2` selects six task types and yes/no vision;
+unknown/mixed versions or incompatible checkpoint question hashes fail closed.
+Executable code/scripts/stylesheets take precedence over a creative subject;
+nonprogramming creation/appreciation is creative. Ambiguous visual actions and
+unresolved vision remain adjudication/excluded, never forced binary.
+
+See the [versioned API and CLI contract](docs/LABEL-SCHEMA.md) and
+[labeling rubric](data/labeling/RUBRIC.md). Prepare writes v2 only to a new separate
+directory; preflight/train/model questions/run metadata/serve/evaluation carry the
+selected version. V2 serving requires matching run + calibration schema metadata.
+The [15 clearly synthetic creative+vision examples](data/synthetic-examples/labels-v2-creative-vision.jsonl)
+(4 flagship) are **split-independent supplemental only**, not real support or
+measured improvement; no automatic ingestion or calibration/test membership.
+Frozen v3c recipe/artifacts are unchanged. **#18 remains OPEN**: six real uncertain
+reviews, 16 creative blinded reviews, real version provenance/group support and
+no-leak acceptance are unavailable. No training, smoke or model loading is implied.
+
+
+Integration with pending #8 keeps its intake API separate from task semantics:
+`label_schema_version` remains source integer 1; `task_label_schema_version`
+identifies router-label-v1/v2. V1 frozen/unified and expert-only split-v2 remain
+available. V2 supports expert-only new outputs with the frozen-v1 split algorithm;
+v2 + unified/measured/prepare-preflight/split-v2 fails closed before writes.
+See the [exact supported matrix](docs/LABEL-SCHEMA.md#composed-interface-matrix-8--18--24).
+The exact #8 candidate is a pending strong dependency, NOT approved/main; publication
+waits for independent upstream round-2 approval+merge and fresh full integrated review.
+
 ## Why this exists
 
 Multi-agent harnesses waste money and latency when every subtask goes to the largest
@@ -124,8 +154,43 @@ two-stage training remains a protocol, not a fake independent LM head. task_type
 remains diagnostic-only, not a production route selector. No causal creative-collapse
 or auxiliary-benefit claim is made. All three issues remain **OPEN**. See the
 [complete API, numerical rationale, matched experiment protocol and blocked acceptance
-ledger](<research/training-paths-v1.md>); #18 schema integration is deliberately
-unmerged and the initial recipe accepts legacy7-v1 only.
+ledger](<research/training-paths-v1.md>). The locally integrated #18 task-schema
+candidate still requires independent approval and upstream merge before publication.
+Research config remains **legacy7-v1 only**: default/explicit `--label-schema router-label-v1`
+selects the same seven questions; `router-label-v2` research is **unsupported** and
+refused before config/data/sampler/model/output work. Non-research v2 keeps its
+separate six-question, fingerprinted opt-in path. Source provenance integer
+`label_schema_version: 1` is distinct from semantic string
+`task_label_schema_version: "router-label-v1"` (or v2). Measured shadow rows never
+supply research supervision or confidence weights; old unversioned checkpoints
+retain legacy seven-question meaning. Final integration must also absorb compatible
+later policy/server changes and receive fresh red-team review; prior source reviews
+are not approval of this combined tree.
+
+## Unified label intake and cold start (issue #8)
+
+`prepare.py --outcomes <full-v2-audit.json> --routes <candidate-routes.json>`
+accepts gated candidate outcomes alongside explicit expert understanding labels.
+Training/calibration/test remain expert-only; measured labels go into a separate
+traceable shadow partition with route fingerprints and trial/gate metadata.
+No understanding fields are inferred from outcomes. Measured confidence is an
+interval confidence level, never an expert sample weight. A future per-candidate
+success-probability field is reserved as null, not fitted from mock evidence.
+Add `--preflight` for stdlib-only validation (no torch, models, splitting or
+writes); `--unified` also supports expert-only intake. These flags use the
+default/explicit `--split-version frozen-v1`. Combining split-v2 with any
+`--unified`, `--outcomes`, `--routes`, or `--preflight` explicitly fails before
+input reads/writes; measured input is never silently ignored. `--output` is
+split-v2-only. See the [supported flag matrix](docs/DATA.md#cli-coexistence-unified-intake-vs-split-v2).
+Unified mode requires a fresh output bundle; any existing unified output blocks
+**all frozen-v1 modes**, even preflight/expert-only reruns. Migrate or change corpus/evidence in a new directory
+with input files only; nothing is auto-deleted. Legacy-only runs still replace
+their five regular outputs. All metadata must be finite UTF-8 JSON; validation
+and serialization finish before writes (not a crash/I/O/concurrency transaction).
+See [schema, exact overwrite policy and migration](docs/DATA.md#output-lifecycle-and-migration).
+Legacy expert splits and frozen v3c remain unchanged. Genuine measured supply
+and validity remain external acceptance in #26; synthetic CPU tests are not
+real measurements or production qualification.
 
 ## Repository layout
 
@@ -464,6 +529,36 @@ Code and documentation: **Apache-2.0** (see [LICENSE](LICENSE), [NOTICE](NOTICE)
 The base model is upstream Apache-2.0; redistributed fine-tuned checkpoints inherit
 its obligations. Real task data is not covered by this license because it is not
 distributed.
+
+### Opt-in split-v2 (CPU, issue #24)
+
+The historical/default `prepare()` and frozen outputs are unchanged. New entry
+points `prepare.split_v2(tasks, labels, ...)` (pure) and
+`prepare.prepare_v2(root, output, ...)` (fresh bundle) are stdlib-only:
+
+```sh
+CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void python prepare.py \
+  --split-version split-v2 --data /path/to/new-expert-inputs \
+  --output /path/to/nonexistent-split-v2-bundle
+```
+
+A new directory holds versioned `*.split-v2.jsonl` and
+`split-report.split-v2.json`; all existing output paths are refused. Roots and
+transitive cross-root near-duplicate components stay indivisible. Every selected
+split has largest component share **≤35%**; the gate is never weakened. Scoring
+adds vision=yes and task_type proportion penalties and reports targets, actual
+proportions/deviations, class support and descriptive Kish concentration — **not
+independent effective sample size or independence proof**. Jaccard <.88 does not
+establish independence; child sessions/time windows cannot authorize root splitting.
+
+Provable impossibility returns `infeasible`; bounded heuristic failure returns
+`search_exhausted`, **not a proof**. Either writes only a new diagnostic report
+(exit 2), never a relaxed split. See [DATA.md](docs/DATA.md#opt-in-split-v2-cpu-development-issue-24)
+for objective weights, exhaustive/heuristic budgets and the API contract.
+**A changed test set is not directly comparable to historical frozen-v1 metrics.**
+No real re-split or vision improvement is claimed: #24 is synthetic CPU development;
+versioned labels (#18) and real distribution/.35 feasibility/version review remain
+external acceptance in #27. Training data paths are not switched automatically.
 
 ### Frozen-test sensitivity (CPU, issue #4)
 

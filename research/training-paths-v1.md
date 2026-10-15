@@ -182,16 +182,23 @@ An independent-head/two-stage **protocol** (not an implemented mode):
 
 ## Concurrent integration and blocked acceptance ledger
 
-This branch is independently based on public baseline 8c04cd7. #18 concurrently
-owns schema/QUESTIONS/train/serve changes; no merge or global schema mutation is
-performed here. Research v1 accepts **legacy7-v1 only** and checks actual question
-ordering at runtime/preflight. #18's six-type schema cannot be inferred from an
-old checkpoint or silently substituted. Integration overlaps in train_eval's
-reader/schema/run setup and the README pair; resolve deliberately and introduce
-an explicit supported recipe schema version with shared tests. #8 provenance
-translation likewise needs a reviewed interface before measured rows can enter.
-No branch integration is claimed; #19 real runs depend on #18, #20 runs depend on
-#19 and frozen #21 protocol (not all future OOF research).
+The initial research candidate was independently based on public baseline 8c04cd7.
+The task branch now locally merges the exact #18 candidate (including #8 provenance
+and #24 split gates); that upstream candidate still needs independent approval and
+merge before publication. This combined tree needs fresh red-team review, and the
+parent's final integration must absorb later policy/server changes where needed.
+Research v1 remains **legacy7-v1 only**: semantic `router-label-v1` maps to this
+recipe, and default/no-version means the same legacy seven-question schema.
+`router-label-v2` research is explicitly unsupported and rejected before reading
+research config/data, sampling, model loading or output creation. Non-research v2
+retains #18's six-question/fingerprint/preload guards; old checkpoints are never
+reinterpreted. Source `label_schema_version` is integer 1, while semantic
+`task_label_schema_version` is a separate string. Sampler intake rejects mixed/v2
+semantics, malformed source versions and measured shadow partitions; measured
+confidence never becomes an expert weight. Existing #8 finite-UTF8/no-overwrite
+intake and #24 split gates are retained unchanged from that upstream candidate.
+#19 real runs still depend on approved #18 labels; #20 depends on #19 and frozen
+#21 protocol (not all future OOF research).
 
 External and still-blocked acceptance:
 - #19 real smoke; authorized matched individual/combined ablations with clean
@@ -210,9 +217,12 @@ External and still-blocked acceptance:
 
 这是 #19/#20/#5 的**显式 opt-in 公共 CPU 开发子集**，三项 issue 全部保持 OPEN；
 未加载/下载模型、未训练/真实 smoke、未调用 GPU，也没有私有数据或性能结论。
-无 `--research-config` 时旧行为不变；冻结 v3c、全局 QUESTIONS、共享截断与服务不变。
-配置仅支持 legacy7-v1；#18 六类 schema 与 train_eval/README 重叠必须单独审查集成，
-不能从依赖版本或旧 checkpoint 猜测兼容。新数据/协议标识和 256 行预算均为示例，非批准方案。
+无 `--research-config` 时保留上游默认/显式 v2 行为；冻结 v3c 与全局七分类 QUESTIONS 不变。
+本地已合入精确 #18 候选，但须该上游独立批准并先合并后才可发布，组合树还须重新红队审查。
+研究配置仅支持 legacy7-v1，对应默认/显式 router-label-v1；router-label-v2 研究模式在
+配置/数据读取、采样、模型、输出前拒绝；不从旧 checkpoint 猜测兼容。
+来源整数 label_schema_version 与语义字符串 task_label_schema_version 分离，measured 影子行拒绝训练。
+新数据/协议标识和 256 行预算均为示例，非批准方案。
 
 平方根组采样按 n_g^-0.5 有放回抽样，合成 balanced+vision=yes 仅在采样概率乘 1.5，
 不再叠乘 loss。明确记录自然/目标/实际概率和先验来源；默认先验排除合成行，

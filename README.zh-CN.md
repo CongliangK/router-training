@@ -8,6 +8,30 @@
 
 路由器只打分、不生成任务答案：固定选项 logits 决策，训练与服务共用同一条确定性截断链路（8K 上下文，超长走头/尾保留 + `[ROUTING_CONTEXT_TRUNCATED]` 标记）。
 
+## 显式六类标签（#18，仅公开 CPU 子集）
+
+默认/无版本 checkpoint 仍用**原样七类 v1 问题**；显式
+`--label-schema router-label-v2` 才选择六类 task_type 与 yes/no 视觉监督。
+未知/混合版本、checkpoint 问题哈希或类别顺序不符均硬失败。
+主要交付为可执行代码/脚本/样式表时优先 implementation；非编程创作/鉴赏才是
+creative。视觉动作不明、uncertain 无证据时保留待裁定/排除，不能强制二值化。
+
+详见[版本 API 与 CLI 契约](docs/LABEL-SCHEMA.md)和[标注标准](data/labeling/RUBRIC.md)。
+v2 prepare 只写新的独立目录；预检/训练/问题/运行元数据/服务/评估均携带版本；
+v2 服务加载前核对 run 与 calibration 的完整 schema 元数据。
+[15 条明确虚构的 creative+vision 例子](data/synthetic-examples/labels-v2-creative-vision.jsonl)
+（旗舰 4 条）**独立于 split，仅作补充**，不是实际任务、真实独立组支持或实测改善；
+不自动导入，不属于校准/测试。v3c 配方与冻结产物不变。
+**#18 仍 OPEN**：六条真实 uncertain 证据复核、16 条 creative 盲审、真实新版本溯源、
+组支持与无泄漏验收仍不可用。本变更不代表训练/冒烟/模型加载授权。
+
+
+与待验收 #8 集成时来源 API 与任务语义分离：`label_schema_version` 仍为来源整数 1，
+`task_label_schema_version` 才是 router-label-v1/v2。v1 冻结/统一来源及专家 split-v2 保留；
+v2 仅支持旧切分算法的专家新目录，v2+统一/实测/prepare预检/split-v2 均在写入前拒绝。
+详见[完整支持矩阵](docs/LABEL-SCHEMA.md#composed-interface-matrix-8--18--24)。
+#8 候选仍是待独立二轮批准并合入上游的强依赖，不是已批准/main；集成 SHA 需全新完整红队。
+
 ## 为什么值得看
 
 模型本身不稀奇，稀奇的是周围的工程：
@@ -89,7 +113,34 @@ smoke/训练、显存及质量均**未验证**；训练后权重插值明确不�
 可配置 task_type=0 / .3 与 literal tier-only；独立头两阶段只有明确协议，不伪装共享
 LM 头。task_type 仍只用于诊断，不参与生产路由；没有辅助损失收益或 creative 塌缩的因果
 答案。三项 issue 均保持 **OPEN**。详见[完整 API、数值依据、匹配实验协议和外部验收台账](<research/training-paths-v1.md>)。
-#18 schema 分支未合并，初版配方仅接受 legacy7-v1，集成需另行审查。
+本地集成的 #18 task-schema 候选仍须独立批准并先合入上游，之后才可发布。
+研究配方仍**仅接受 legacy7-v1**：默认/显式 `--label-schema router-label-v1` 使用同样的
+七分类问题；研究模式的 `router-label-v2` **不支持**，在配置/数据读取、采样、模型、输出
+之前拒绝。非研究 v2 保留独立六分类、问题指纹及显式 opt-in 路径。
+来源整数 `label_schema_version: 1` 与语义字符串
+`task_label_schema_version: "router-label-v1"`（或 v2）严格分离；measured 影子行不作
+研究监督或专家置信度权重，旧无版本 checkpoint 仍为七分类。
+父级最终集成还须吸收兼容的后续 policy/server 变更并重新红队审查；原分支 PASS 不是组合树批准。
+
+## 双来源标签与冷启动（issue #8）
+
+`prepare.py --outcomes <完整v2审计.json> --routes <候选routes.json>` 接收已过门禁的
+候选结果并与显式专家任务理解标签关联。train/calibration/test 仍仅含专家标签；
+measured 单独输出可追溯影子分区，保留 route 指纹及试验/门禁元数据，不从 outcome
+臆造任务理解字段。实测 confidence 是区间置信水平，绝不是专家样本权重。
+预留的每候选成功率字段当前为 null，不把 mock 结果拟成成功率头。
+加 `--preflight` 可仅用 stdlib 结构预检（无 torch/模型、不切分、不写文件）；
+`--unified` 也支持纯专家入口。这些 flag 适用默认/显式 `--split-version frozen-v1`；
+split-v2 与 `--unified`、`--outcomes`、`--routes`、`--preflight` 的任意组合均在
+读写之前明确报错，绝不忽略实测输入。`--output` 仅用于 split-v2。
+[支持的 flag 组合表](docs/DATA.md#cli-coexistence-unified-intake-vs-split-v2)。
+统一模式要求全新输出包；已有任意统一输出则所有 frozen-v1 模式（含预检/纯专家重跑）
+均拒绝。迁移或换语料/证据须新建目录仅复制输入，不自动删除数据。
+无统一输出时，默认专家模式仍覆盖五个普通输出文件。任意元数据须为有限数值 UTF-8 JSON，
+校验/序列化完成才写出（非崩溃、I/O 或并发事务）。
+[schema、精确覆盖策略与迁移详见 DATA](docs/DATA.md#output-lifecycle-and-migration)。
+既有专家切分及冻结 v3c 不变。真实 measured 供给与有效性仍由 #26 外部验收；
+合成 CPU 测试不是真实测量或生产资格证明。
 
 ## 目录结构
 
@@ -282,6 +333,33 @@ seed 20261010、accumulation 8、label smoothing 0.05、beta 0.999、`--fullft -
 ## 许可证
 
 代码与文档：**Apache-2.0**（见 [LICENSE](LICENSE)、[NOTICE](NOTICE)）。基座模型上游 Apache-2.0；再分发微调权重须继承其义务。真实任务数据不随仓库分发，故不在本许可覆盖范围内。
+
+### 显式启用 split-v2（CPU，issue #24）
+
+历史/默认 `prepare()` 算法和冻结产物保持不变。新增纯函数
+`prepare.split_v2(tasks, labels, ...)` 与新目录写入接口
+`prepare.prepare_v2(root, output, ...)`，均只需标准库：
+
+```sh
+CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void python prepare.py \
+  --split-version split-v2 --data /path/to/new-expert-inputs \
+  --output /path/to/nonexistent-split-v2-bundle
+```
+
+必须显式指定输入与全新输出目录，生成版本化 `*.split-v2.jsonl` 与
+`split-report.split-v2.json`；已有文件、目录、符号链接一律拒绝。
+根会话与跨根近重复连通分量（含传递关系）不可拆，每个选中切分最大单组占比
+**≤35%**，绝不降门槛。评分增加 vision=yes 比例与 task_type 分布惩罚；报告
+目标、实际比例/偏差、类支持量及描述性的 Kish 组大小集中度，**不是独立有效
+样本量或独立性证明**。Jaccard <.88 不证明语义/上下文独立；子会话/时间窗只作
+描述，不能据此拆根跨集。
+
+有证明的不可行返回 `infeasible`；有界启发式未找到候选返回
+`search_exhausted`，**不是不可行证明**。二者均仅写新诊断报告并退出 2，不输出
+放松约束的切分。权重、穷举/启发式预算与接口详见 [DATA.md](docs/DATA.md#opt-in-split-v2-cpu-development-issue-24)。
+**更换测试集后，指标不可与历史 frozen-v1 直接比较。** #24 仅做合成 CPU 开发，
+未执行真实重切、不保证真实视觉比例改善；新版本标签依赖 #18，真实分布、35%
+可行性及数据版本复核仍单列 #27 外部验收。训练输入路径不会自动切换。
 
 ### 冻结测试集删组敏感性（CPU，issue #4）
 

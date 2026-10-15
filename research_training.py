@@ -66,7 +66,16 @@ def load_config(path):return validate_config(json.loads(Path(path).read_text()))
 def config_hash(c):return hashlib.sha256(json.dumps(c,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
 
+def check_task_schema(schema_version=None):
+    """Map semantic v1 to the research recipe, never source provenance integers."""
+    from task_label_schema import LEGACY, version
+    if version(schema_version)!=LEGACY:
+        raise ValueError('router-label-v2 research is unsupported; research v1 requires legacy7-v1 (router-label-v1)')
+    return SCHEMA
+
+
 def check_args(c,args):
+    check_task_schema(getattr(args,'label_schema',None))
     if getattr(args,'legacy_calibration',False) or getattr(args,'smoke',False):raise ValueError('research config cannot combine with legacy calibration or smoke; separate authorization/protocol required')
     for key,value in c['training'].items():
         if getattr(args,key,None)!=value:raise ValueError(f'research config/CLI mismatch: {key}')
@@ -95,6 +104,10 @@ def confidence_weight(row,enabled=True):
 
 def sampler_plan(rows,c):
     validate_config(c)
+    # #8 source contract integer != #18 task semantics string. Reject mixed/v2
+    # rows and shadow partitions even if an expert source was copied onto them.
+    from task_label_schema import LEGACY, validate_supervised_rows
+    validate_supervised_rows(rows,LEGACY)
     if not rows:raise ValueError('empty train pool')
     ids=[r.get('id') for r in rows]
     if any(not isinstance(i,str) or not i for i in ids) or len(set(ids))!=len(ids):raise ValueError('unique nonempty train ids required')
