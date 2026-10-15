@@ -8,14 +8,14 @@
 | `router-label-v2` (explicit opt-in) | extraction, research, implementation, debugging, review, creative | yes/no only; unresolved cases excluded into adjudication ledger |
 
 `model_utils.QUESTIONS` and `TYPES` remain the original seven-type objects.
-`label_schema.questions_for(version, legacy_questions=None)` returns a fresh
+`task_label_schema.questions_for(version, legacy_questions=None)` returns a fresh
 versioned table; v2 never mutates v1. The question text **and ordered options**
 are part of the model interface, not just a classifier name change. Do not score
 an old checkpoint using six options, drop the visual logit, or rename it in place.
 
-- `label_schema.version(None)` selects v1; unknown versions fail.
+- `task_label_schema.version(None)` selects v1; unknown versions fail.
 - `validate_supervised_rows(rows, version)` rejects mixed versions. V2 needs a
-  top-level `label_schema_version` and `label.label_status: "resolved"`, legal
+  top-level `task_label_schema_version` and `label.label_status: "resolved"`, legal
   tier/type and binary vision. Adjudication/excluded and supplemental rows cannot
   supply ordinary training/calibration/evaluation support.
 - `reviewed_task_type(primary_action, evidence=None)` accepts
@@ -32,7 +32,7 @@ an old checkpoint using six options, drop the visual logit, or rename it in plac
 
 ## Prepare, preflight, train, score, serve, evaluate
 
-New v2 recovery labels explicitly carry `label_schema_version` and `label_status`.
+New v2 recovery labels explicitly carry `task_label_schema_version` and `label_status`.
 Prepare requires a **new separate output directory**, refuses any existing output,
 retains near-duplicate unions even through excluded tasks, and writes resolved
 splits, the adjudication ledger, schema metadata and counts. It does not change
@@ -64,10 +64,10 @@ in `effective_config.supplemental_rows`; the prior still excludes synthetic rows
 `model_utils.load_engine(..., schema_version=...)` tags the engine; `request_for`
 and `score` use its bound version, rejecting an explicit mismatch. The SAME
 truncation implementation serves both versions and train/serve. Scoring checks
-logit width; v2 predictions carry `label_schema_version`.
+logit width; v2 predictions carry `task_label_schema_version`.
 
 New v2 runs write `label-schema.json` and `calibration.json.label_schema`, each
-containing `label_schema_version`, `question_sha256` (canonical full question
+containing `task_label_schema_version`, `question_sha256` (canonical full question
 JSON SHA-256), and ordered `classes`. Effective run metadata records the same
 contract. `resolve_run_schema(calibration, run_metadata, requested)` and
 `load_run_schema(directory, requested)` reject unknown/missing-v2, mismatched
@@ -75,7 +75,7 @@ versions, changed question fingerprints or class order **before loading weights*
 Both files are required for v2. Unversioned old calibration is valid **only as v1**.
 
 Serving defaults to v1; v2 requires `server.py --label-schema router-label-v2`.
-Health/route responses expose `label_schema_version` separately from HTTP
+Health/route responses expose `task_label_schema_version` separately from HTTP
 `schema_version` (also distinct from outcome/source schemas). Schema validation
 precedes model loading even for diagnostic mode; execution/shadow quality gates
 remain untouched. This change does not launch/restart a service.
@@ -107,7 +107,7 @@ Legal schemas and synthetic passes do not establish any support/performance goal
 
 ## Concurrent integration boundary
 
-- #8 dual-source ingest: compose its source schema with `label_schema_version`;
+- #8 dual-source ingest: compose its source schema with `task_label_schema_version`;
   source/outcome schema numbers are NOT label versions. Preserve measured shadow
   partition and never fabricate understanding labels. Overlap: prepare, train
   reader/preflight, DATA/README docs.

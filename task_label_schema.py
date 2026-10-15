@@ -40,7 +40,7 @@ def questions_for(schema_version=LEGACY, legacy_questions=None):
 def metadata(schema_version=LEGACY):
     selected=version(schema_version);questions=questions_for(selected)
     encoded=json.dumps(questions,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()
-    return {'label_schema_version':selected,'question_sha256':hashlib.sha256(encoded).hexdigest(),
+    return {'task_label_schema_version':selected,'question_sha256':hashlib.sha256(encoded).hexdigest(),
             'classes':{head:list(spec['criteria']) for head,spec in questions.items()}}
 
 
@@ -54,14 +54,14 @@ def resolve_run_schema(calibration, run_metadata=None, requested=LEGACY):
     selected=version(requested)
     if not isinstance(calibration,dict):raise ValueError('calibration must be an object')
     declared=calibration.get('label_schema')
-    if 'label_schema_version' in calibration:
+    if 'task_label_schema_version' in calibration:
         raise ValueError('run schema must use complete label_schema metadata, not a bare version')
     if declared is None:
         if selected!=LEGACY or run_metadata is not None:
             raise ValueError('unversioned calibration is legacy only; v2 metadata cannot be inferred')
         return LEGACY
     if not isinstance(declared,dict):raise ValueError('invalid label schema metadata')
-    actual=version(declared.get('label_schema_version'))
+    actual=version(declared.get('task_label_schema_version'))
     if actual!=selected:raise ValueError('requested label schema differs from checkpoint schema')
     if declared!=metadata(actual):raise ValueError('checkpoint question fingerprint/classes mismatch')
     if actual==V2 and run_metadata is None:raise ValueError('v2 checkpoint needs label-schema.json')
@@ -84,10 +84,10 @@ def check_row_versions(rows, schema_version=LEGACY):
     for row in rows:
         if not isinstance(row,dict):raise ValueError('label rows must be objects')
         label=row.get('label') or {}
-        declarations=[obj['label_schema_version'] for obj in (row,label)
-                      if isinstance(obj,dict) and 'label_schema_version' in obj]
-        if selected==V2 and row.get('label_schema_version')!=V2:
-            raise ValueError('v2 rows require explicit top-level label_schema_version')
+        declarations=[obj['task_label_schema_version'] for obj in (row,label)
+                      if isinstance(obj,dict) and 'task_label_schema_version' in obj]
+        if selected==V2 and row.get('task_label_schema_version')!=V2:
+            raise ValueError('v2 rows require explicit top-level task_label_schema_version')
         if any(version(v)!=selected or v is None for v in declarations):
             raise ValueError('mixed row label schema versions are forbidden')
 
@@ -149,7 +149,7 @@ def review_legacy_label(label, *, vision_decision=None, vision_evidence=None,
     Caller supplies independently reviewed evidence, not model predictions. This
     helper does not attest that the evidence is true or authorize real review.
     """
-    result=copy.deepcopy(label);result['label_schema_version']=V2
+    result=copy.deepcopy(label);result['task_label_schema_version']=V2
     result['label_status']='resolved';pending=[];review={}
     if label.get('needs_vision')=='uncertain':
         if vision_decision not in ('yes','no') or not isinstance(vision_evidence,str) or not vision_evidence.strip():
@@ -179,7 +179,7 @@ def partition_labels(labels, schema_version=LEGACY):
     selected=version(schema_version);active=[];pending=[]
     for label in labels:
         row={'label':label}
-        if 'label_schema_version' in label:row['label_schema_version']=label['label_schema_version']
+        if 'task_label_schema_version' in label:row['task_label_schema_version']=label['task_label_schema_version']
         check_row_versions([row],selected)
         if selected==V2 and label.get('label_status') in ('adjudication','excluded'):
             if not label.get('adjudication_reasons'):

@@ -30,7 +30,7 @@ def load_engine(adapter=None,device='cuda',max_length=8192,full_checkpoint=None,
     # The base checkpoint natively supports 262144 positions; 8192 keeps every
     # historical task (max 3284 tokens incl. template) untruncated while the
     # head/tail scheme below remains the extreme-prompt safety net.
-    from label_schema import version, load_run_schema
+    from task_label_schema import version, load_run_schema
     selected=version(schema_version)
     product=full_checkpoint or adapter
     if product:
@@ -41,7 +41,7 @@ def load_engine(adapter=None,device='cuda',max_length=8192,full_checkpoint=None,
     base=ROOT/'models/intern-decision-0.8b'
     checkpoint=full_checkpoint if full_checkpoint else base
     engine=reference.DecisionEngine(checkpoint=checkpoint,device=device,max_length=max_length,temperature=1.0)
-    engine.label_schema_version=selected
+    engine.task_label_schema_version=selected
     if full_checkpoint:
         # Full fine-tune product: weights already merged; no adapter layer.
         engine.backend.model.eval()
@@ -53,8 +53,8 @@ def load_engine(adapter=None,device='cuda',max_length=8192,full_checkpoint=None,
 
 
 def engine_schema(engine,schema_version=None):
-    from label_schema import version
-    bound=version(getattr(engine,'label_schema_version',None))
+    from task_label_schema import version
+    bound=version(getattr(engine,'task_label_schema_version',None))
     if schema_version is not None and version(schema_version)!=bound:
         raise ValueError('requested schema differs from loaded engine schema')
     return bound
@@ -69,7 +69,7 @@ def request_for(engine,prompt,max_prompt_tokens=7700,schema_version=None):
     if truncated:
         head=max_prompt_tokens*3//4;tail=max_prompt_tokens-head
         prompt=engine.tokenizer.decode(ids[:head])+'\n[ROUTING_CONTEXT_TRUNCATED]\n'+engine.tokenizer.decode(ids[-tail:])
-    from label_schema import questions_for
+    from task_label_schema import questions_for
     return {'state':{'delegated_task':prompt},'questions':questions_for(engine_schema(engine,schema_version),QUESTIONS)},truncated
 
 
@@ -87,7 +87,7 @@ def field_logits(engine,request,train=False):
 
 def score(engine,prompt,temperatures=None,adjustments=None,schema_version=None):
     import torch
-    from label_schema import questions_for
+    from task_label_schema import questions_for
     selected=engine_schema(engine,schema_version);questions=questions_for(selected,QUESTIONS)
     request,truncated=request_for(engine,prompt,schema_version=selected);engine.backend.model.eval()
     with torch.inference_mode(): logits,length=field_logits(engine,request)
@@ -104,7 +104,7 @@ def score(engine,prompt,temperatures=None,adjustments=None,schema_version=None):
         probabilities=torch.softmax(values/temperature,dim=-1).cpu().tolist()
         best=max(range(len(labels)),key=lambda i:probabilities[i])
         result[field]={'choice':labels[best],'confidence':probabilities[best],'probabilities':dict(zip(labels,probabilities)),'logits':values.cpu().tolist()}
-    return {'answers':result,'input_tokens':length,'context_truncated':truncated,'label_schema_version':selected}
+    return {'answers':result,'input_tokens':length,'context_truncated':truncated,'task_label_schema_version':selected}
 
 
 def read_jsonl(path):

@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from label_schema import LEGACY, VERSIONS, validate_supervised_rows, training_supplemental
+from task_label_schema import LEGACY, VERSIONS, validate_supervised_rows, training_supplemental
 from calibration_groups import PlanError, compute_prior, preflight_roles, anonymous_summary
 
 

@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from peft import LoraConfig,get_peft_model
 from evaluation_metrics import target, per_class, bootstrap_ci, validate_answer, calibration_bins, routing_costs, metrics
 from split_reporting import split_report
-from label_schema import LEGACY, V2, VERSIONS, version, questions_for, metadata, validate_supervised_rows, validate_prediction_rows, training_supplemental
+from task_label_schema import LEGACY, V2, VERSIONS, version, questions_for, metadata, validate_supervised_rows, validate_prediction_rows, training_supplemental
 from model_utils import ROOT,TIERS,TYPES,QUESTIONS,load_engine,read_jsonl,request_for,field_logits,score
 
 # --- Issue #14: training-reproducibility constants (scheduler / SWA audit) ---
@@ -314,11 +314,11 @@ def run_grouped_calibration(plan,scored_rows,prior,protocol,checkpoint_ref):
     # row set that is not exactly role B, so a wiring mistake fails loudly.
     from calibration_groups import select_tau_oof
     by_id={row['id']:row for row in plan['rows_by_role']['B']}
-    selected=plan['schema'].get('label_schema_version',LEGACY)
+    selected=plan['schema'].get('task_label_schema_version',LEGACY)
     active=[row for row in scored_rows if row['id'] in by_id]
     validate_prediction_rows(active,selected)  # never stamp old seven-option predictions as v2
     logits_rows=[{'id':row['id'],'split_group':by_id[row['id']]['split_group'],'label':row['label'],
-                   'label_schema_version':row.get('label_schema_version',LEGACY),
+                   'task_label_schema_version':row.get('task_label_schema_version',LEGACY),
                   'logits':{field:answer['logits'] for field,answer in row['answers'].items()}}
                  for row in active]
     return select_tau_oof(plan=plan,rows=logits_rows,prior=prior,protocol=protocol,checkpoint_ref=checkpoint_ref)

@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_DIR = ROOT / 'data'
 RECIPE_PATH = ROOT / 'configs/v3c.json'
 if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
-from label_schema import LEGACY, V2, VERSIONS
+from task_label_schema import LEGACY, V2, VERSIONS
 # configs/v3c.json keys that map to train_eval.py CLI flags. Everything else
 # in the file (description, run name, manifests, prompt budgets) is archive
 # metadata, not overridable training input.

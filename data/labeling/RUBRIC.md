@@ -49,13 +49,13 @@
    - 旧记录仅写“分析图片”，无法判断提取还是审核 → 待裁定，须获取动作证据。
    - 可确认的编程/创作主交付仍按前两项优先；不能只靠含“图”关键词迁移。
 
-纯 stdlib 的 `label_schema.reviewed_task_type` 执行上述确定动作映射；
+纯 stdlib 的 `task_label_schema.reviewed_task_type` 执行上述确定动作映射；
 `review_legacy_label` 复制旧标签并记录证据或待裁定，不修改输入，不猜测提示词。
 代码不保证人工提交的证据真实，也不替代独立审查。
 
 ## 输出契约与盲审
 
-- 监督行顶层 `label_schema_version: "router-label-v2"`；嵌入 `label` 内
+- 监督行顶层 `task_label_schema_version: "router-label-v2"`；嵌入 `label` 内
   `label_status: "resolved"`，tier、needs_vision、task_type 均为合法值。
   原始 recovery 标签自身声明版本，prepare 将其传递到最终行。
 - `confidence` 是 0–1 的 **tier 专家判断确定度**，不是成功率、难度或统计区间置信度。

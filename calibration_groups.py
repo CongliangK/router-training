@@ -70,11 +70,11 @@ def schema_from_questions(questions, schema_version=None):
         heads[head] = spec
     result={'heads': heads}
     if schema_version is not None:
-        from label_schema import version, V2, SIX_TYPES
+        from task_label_schema import version, V2, SIX_TYPES
         if version(schema_version)==V2:
             if heads['task_type']['classes']!=list(SIX_TYPES):
                 raise PlanError('v2 business schema needs exactly the ordered six-task classes')
-            result['label_schema_version']=V2
+            result['task_label_schema_version']=V2
     return result
 
 
@@ -139,7 +139,7 @@ def questions_from_source(path=None):
 
 def default_business_schema(path=None, schema_version=None):
     """Legacy AST source remains authoritative; v2 is an explicit derivation."""
-    from label_schema import version, questions_for
+    from task_label_schema import version, questions_for
     selected=version(schema_version)
     return schema_from_questions(questions_for(selected,questions_from_source(path)),selected)
 
@@ -259,8 +259,8 @@ def validate_rows(rows, schema):
     (support accounting reflects that; nothing is silently relabeled)."""
     if not isinstance(rows, list) or not rows:
         raise PlanError('rows must be a non-empty list')
-    from label_schema import validate_supervised_rows
-    try:validate_supervised_rows(rows,schema.get('label_schema_version'))
+    from task_label_schema import validate_supervised_rows
+    try:validate_supervised_rows(rows,schema.get('task_label_schema_version'))
     except ValueError as error:raise PlanError(str(error)) from error
     heads = schema['heads']
     seen = set()
@@ -510,8 +510,8 @@ def compute_prior(rows, head, schema, add_one=True):
     real support (a silent zero-count prior is not acceptable for new runs;
     the archived legacy path keeps its own original prior untouched).
     add-one smoothing is a PROVISIONAL protocol choice."""
-    from label_schema import validate_supervised_rows
-    try:validate_supervised_rows(rows,schema.get('label_schema_version'),allow_supplemental=True)
+    from task_label_schema import validate_supervised_rows
+    try:validate_supervised_rows(rows,schema.get('task_label_schema_version'),allow_supplemental=True)
     except ValueError as error:raise PlanError(str(error)) from error
     spec = schema['heads'][head]
     classes = spec['classes']
@@ -716,8 +716,8 @@ def select_tau_oof(plan, rows, prior, checkpoint_ref, protocol=None):
 
     if not isinstance(rows, list):
         raise PlanError('scored rows must be a list')
-    from label_schema import validate_supervised_rows
-    try:validate_supervised_rows(rows,schema.get('label_schema_version'))
+    from task_label_schema import validate_supervised_rows
+    try:validate_supervised_rows(rows,schema.get('task_label_schema_version'))
     except ValueError as error:raise PlanError(str(error)) from error
     scored = {}
     for row in rows:
@@ -861,8 +861,8 @@ def anonymous_summary(plan):
     counts = _group_row_counts([r for role in ROLES for r in rows_by_role[role]])
     folds = [{'fold': i, 'groups': len(f), 'rows': sum(counts[g] for g in f)}
              for i, f in enumerate(plan['folds'])]
-    from label_schema import version
-    return {'mode': plan['mode'], 'label_schema_version':version(plan['schema'].get('label_schema_version')), 'roles': {r: {'groups': len(roles[r]), 'rows': len(rows_by_role[r])} for r in ROLES},
+    from task_label_schema import version
+    return {'mode': plan['mode'], 'task_label_schema_version':version(plan['schema'].get('task_label_schema_version')), 'roles': {r: {'groups': len(roles[r]), 'rows': len(rows_by_role[r])} for r in ROLES},
             'folds': folds, 'support': plan['support'],
             'optional_head_status': plan['optional_head_status'],
             'plan_hash': plan['plan_hash'], 'protocol_hash': plan['protocol_hash']}

@@ -1,7 +1,7 @@
 """Shared CPU-only evaluation metrics; no training or model imports."""
 import collections, math, random
 from model_utils import TIERS, QUESTIONS
-from label_schema import LEGACY, V2, version, questions_for, check_row_versions, validate_supervised_rows, validate_prediction_rows
+from task_label_schema import LEGACY, V2, version, questions_for, check_row_versions, validate_supervised_rows, validate_prediction_rows
 
 def target(row,field):
     return row['label'][{'tier':'tier','vision':'needs_vision','task_type':'task_type'}[field]]
@@ -146,7 +146,7 @@ def metrics(rows,low_support_threshold=10,cost_matrix=None,schema_version=LEGACY
             'mean_latency_ms':sum(r['latency_ms'] for r in rows)/len(rows) if rows else None,
             'metric_definition_version':2,'nll_probability_floor':1e-12}
     valid_by_field={}
-    result['label_schema_version']=selected
+    result['task_label_schema_version']=selected
     for field in questions:
         valid=[r for r in rows if target(r,field) in questions[field]['criteria']];labels=list(questions[field]['criteria'])
         valid_by_field[field]=valid

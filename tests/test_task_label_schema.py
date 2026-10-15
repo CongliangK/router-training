@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-import label_schema as ls
+import task_label_schema as ls
 import model_utils as mu
 import calibration_groups as cg
 from evaluation_metrics import metrics
@@ -20,7 +20,7 @@ def v2_rows(rows):
     rows=copy.deepcopy(rows)
     for row in rows:
         row.pop('synthetic',None)
-        row['label_schema_version']=ls.V2
+        row['task_label_schema_version']=ls.V2
         row['label']['label_status']='resolved'
         if row['label']['task_type']=='visual':row['label']['task_type']='extraction'
     return rows
@@ -61,7 +61,7 @@ class VersionTests(unittest.TestCase):
         row=v2_rows(fixtures.make_train_rows(1))[0]
         for selected in [ls.LEGACY]:
             with self.assertRaises(ValueError):ls.validate_supervised_rows([row],selected)
-        row['label']['label_schema_version']=ls.LEGACY
+        row['label']['task_label_schema_version']=ls.LEGACY
         with self.assertRaises(ValueError):ls.validate_supervised_rows([row],ls.V2)
 
     def test_missing_v2_declaration_and_bad_labels_fail_even_optional_task_type(self):
@@ -69,7 +69,7 @@ class VersionTests(unittest.TestCase):
         for key,value in [('needs_vision','uncertain'),('task_type','visual'),('tier','other'),('label_status','adjudication')]:
             broken=copy.deepcopy(row);broken['label'][key]=value
             with self.subTest(key=key),self.assertRaises(ValueError):ls.validate_supervised_rows([broken],ls.V2)
-        row.pop('label_schema_version')
+        row.pop('task_label_schema_version')
         with self.assertRaises(ValueError):ls.validate_supervised_rows([row],ls.V2)
 
     def test_legacy_uncertain_preserved_by_prepare_but_not_calibration(self):
@@ -129,14 +129,14 @@ class CheckpointTests(unittest.TestCase):
     def test_unversioned_calibration_is_legacy_only(self):
         self.assertEqual(ls.resolve_run_schema({'temperatures':{}}),ls.LEGACY)
         with self.assertRaises(ValueError):ls.resolve_run_schema({},requested=ls.V2)
-        with self.assertRaises(ValueError):ls.resolve_run_schema({'label_schema_version':ls.V2})
+        with self.assertRaises(ValueError):ls.resolve_run_schema({'task_label_schema_version':ls.V2})
 
     def test_v2_needs_both_matching_complete_metadata_and_explicit_optin(self):
         meta=ls.metadata(ls.V2);cal={'label_schema':meta}
         self.assertEqual(ls.resolve_run_schema(cal,meta,ls.V2),ls.V2)
         for args in [(cal,meta,ls.LEGACY),(cal,None,ls.V2),({},meta,ls.V2)]:
             with self.assertRaises(ValueError):ls.resolve_run_schema(*args)
-        for key,value in [('question_sha256','0'*64),('label_schema_version','router-label-v99'),('classes',{})]:
+        for key,value in [('question_sha256','0'*64),('task_label_schema_version','router-label-v99'),('classes',{})]:
             bad=copy.deepcopy(meta);bad[key]=value
             with self.assertRaises(ValueError):ls.resolve_run_schema({'label_schema':bad},bad,ls.V2)
         bad=copy.deepcopy(meta);bad['classes']['task_type'].reverse()
@@ -157,7 +157,7 @@ class CheckpointTests(unittest.TestCase):
     def test_requests_share_truncation_and_bound_schema_without_model(self):
         tokenizer=types.SimpleNamespace(encode=lambda s,**k:list(s),decode=lambda ids:''.join(ids))
         legacy=types.SimpleNamespace(tokenizer=tokenizer)
-        new=types.SimpleNamespace(tokenizer=tokenizer,label_schema_version=ls.V2)
+        new=types.SimpleNamespace(tokenizer=tokenizer,task_label_schema_version=ls.V2)
         old_request,old_cut=mu.request_for(legacy,'<decision>'+('abcdef'*10),12)
         new_request,new_cut=mu.request_for(new,'<decision>'+('abcdef'*10),12)
         self.assertTrue(old_cut and new_cut)
@@ -186,13 +186,13 @@ class ScoringTests(unittest.TestCase):
             values=[math.exp(x-max(tensor.values)) for x in tensor.values]
             return Tensor([x/sum(values) for x in values])
         torch=types.SimpleNamespace(tensor=Tensor,softmax=softmax,inference_mode=contextlib.nullcontext)
-        engine=types.SimpleNamespace(label_schema_version=ls.V2,
+        engine=types.SimpleNamespace(task_label_schema_version=ls.V2,
             tokenizer=types.SimpleNamespace(encode=lambda text,**k:list(text),decode=lambda ids:''.join(ids)),
             backend=types.SimpleNamespace(model=types.SimpleNamespace(eval=lambda:None)))
         logits={head:Tensor([0.]*(len(spec['criteria'])-1)+[2.]) for head,spec in ls.questions_for(ls.V2).items()}
         with patch.dict(sys.modules,{'torch':torch}),patch.object(mu,'field_logits',return_value=(logits,10)):
             result=mu.score(engine,'Synthetic score contract.',schema_version=ls.V2)
-            self.assertEqual(result['label_schema_version'],ls.V2)
+            self.assertEqual(result['task_label_schema_version'],ls.V2)
             self.assertEqual(result['answers']['task_type']['choice'],'creative')
             self.assertEqual(list(result['answers']['task_type']['probabilities']),list(ls.SIX_TYPES))
             logits['task_type']=Tensor([0.]*7)
@@ -215,14 +215,14 @@ class ScoringTests(unittest.TestCase):
             reference=types.SimpleNamespace(DecisionEngine=lambda **kwargs:engine)
             with patch.object(mu,'reference_module',return_value=reference):
                 loaded=mu.load_engine(full_checkpoint=root/'full-checkpoint',schema_version=ls.V2,device='cpu')
-            self.assertIs(loaded,engine);self.assertEqual(engine.label_schema_version,ls.V2)
+            self.assertIs(loaded,engine);self.assertEqual(engine.task_label_schema_version,ls.V2)
 
 
 class MetricsTests(unittest.TestCase):
     def test_fixed_denominators_are_versioned_not_reinterpreted(self):
         row=v2_rows(fixtures.make_train_rows(1))[0];p=predicted(row)
         result=metrics([p],schema_version=ls.V2)
-        self.assertEqual(result['label_schema_version'],ls.V2)
+        self.assertEqual(result['task_label_schema_version'],ls.V2)
         self.assertEqual(result['task_type_per_class']['macro_f1_definition']['denominator'],6)
         self.assertAlmostEqual(result['task_type']['macro_f1'],1/6)
         self.assertNotIn('visual',result['task_type']['confusion'])
@@ -266,11 +266,11 @@ class PipelineTests(unittest.TestCase):
         scored=[predicted(row) for row in pool]
         with patch.object(cg,'select_tau_oof',return_value={'status':'synthetic-adapter-only'}) as select:
             te.run_grouped_calibration(plan,scored,{},plan['protocol'],'not-used-by-mock')
-            self.assertTrue(all(r['label_schema_version']==ls.V2 for r in select.call_args.kwargs['rows']))
+            self.assertTrue(all(r['task_label_schema_version']==ls.V2 for r in select.call_args.kwargs['rows']))
         for kind in ['unversioned','seven-logits']:
             bad=copy.deepcopy(scored)
             for row in bad:
-                if kind=='unversioned':row.pop('label_schema_version')
+                if kind=='unversioned':row.pop('task_label_schema_version')
                 else:row['answers']['task_type']['logits'].append(0.)
             with patch.object(cg,'select_tau_oof') as select,self.assertRaises(ValueError):
                 te.run_grouped_calibration(plan,bad,{},plan['protocol'],'not-used')
@@ -306,7 +306,7 @@ class PipelineTests(unittest.TestCase):
             self.assertFalse((ROOT/'artifacts/labels18-synthetic-structural').exists())
             legacy=subprocess.run([sys.executable,str(ROOT/'scripts/validate_calibration.py'),'--data-dir',str(directory),'--roles',str(roles)],capture_output=True,text=True)
             self.assertEqual(legacy.returncode,1)
-            code="import sys; import label_schema, calibration_groups; calibration_groups.default_business_schema(schema_version=label_schema.V2); assert 'torch' not in sys.modules"
+            code="import sys; import task_label_schema, calibration_groups; calibration_groups.default_business_schema(schema_version=task_label_schema.V2); assert 'torch' not in sys.modules"
             pure=subprocess.run([sys.executable,'-c',code],capture_output=True,text=True,cwd=ROOT)
             self.assertEqual(pure.returncode,0,pure.stderr)
 
@@ -359,7 +359,7 @@ class PipelineTests(unittest.TestCase):
             for n in range(1,5):
                 path=data/f'expert-recovery-{n}.jsonl';labels=prepare.load(path)
                 for label in labels:
-                    label.update(label_schema_version=ls.V2,label_status='resolved')
+                    label.update(task_label_schema_version=ls.V2,label_status='resolved')
                     if label['task_type']=='visual':label['task_type']='extraction'
                 if n==1:
                     labels[0].update(label_status='adjudication',needs_vision=None,adjudication_reasons=['invented missing context'])
@@ -403,9 +403,9 @@ class ServerTests(unittest.TestCase):
                     app=sc.server.create_app('synthetic',label_schema=ls.V2)
                     async with app.router.lifespan_context(app):
                         status,health=await sc.request(app,'/health')
-                        self.assertEqual(status,200);self.assertEqual(health['label_schema_version'],ls.V2)
+                        self.assertEqual(status,200);self.assertEqual(health['task_label_schema_version'],ls.V2)
                         status,result=await sc.request(app,'/route',{'prompt':'Invented schema test.'})
-                        self.assertEqual(status,200);self.assertEqual(result['label_schema_version'],ls.V2)
+                        self.assertEqual(status,200);self.assertEqual(result['task_label_schema_version'],ls.V2)
                         self.assertIs(result['execution_allowed'],False)
                     self.assertEqual(loader.call_args.kwargs['schema_version'],ls.V2)
                     app=sc.server.create_app('synthetic')

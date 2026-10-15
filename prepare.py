@@ -14,7 +14,7 @@ def grams(prompt):
     return {text[i:i+5] for i in range(max(0,len(text)-4))}
 
 def prepare(root: Path, seed=20261010, similarity=.88, schema_version=None, output=None):
-    from label_schema import LEGACY, V2, version, partition_labels, metadata
+    from task_label_schema import LEGACY, V2, version, partition_labels, metadata
     selected=version(schema_version)
     destination=root if output is None else Path(output)
     if selected==V2 and (output is None or destination.resolve()==root.resolve()):
@@ -57,8 +57,8 @@ def prepare(root: Path, seed=20261010, similarity=.88, schema_version=None, outp
         label=by_id[row['id']]
         joined={**row,'label':label,'split_group':find(row['group'])}
         if selected==V2:
-            from label_schema import validate_supervised_rows
-            joined['label_schema_version']=selected
+            from task_label_schema import validate_supervised_rows
+            joined['task_label_schema_version']=selected
             validate_supervised_rows([joined],selected)
         grouped[find(row['group'])].append(joined)
     assert len(grouped)>=3,'Too few independent groups for train/calibration/test'
@@ -105,7 +105,7 @@ def prepare(root: Path, seed=20261010, similarity=.88, schema_version=None, outp
 
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--data',type=Path,default=Path(__file__).parent/'data');p.add_argument('--seed',type=int,default=20261010)
-    from label_schema import VERSIONS, LEGACY
+    from task_label_schema import VERSIONS, LEGACY
     p.add_argument('--label-schema',choices=VERSIONS,default=LEGACY)
     p.add_argument('--output',type=Path,help='required new output directory for v2; never overwrite frozen inputs')
     a=p.parse_args();prepare(a.data,a.seed,schema_version=a.label_schema,output=a.output)

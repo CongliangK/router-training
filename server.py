@@ -9,7 +9,7 @@ import uvicorn
 from model_utils import ROOT,load_engine,score
 from policy import select,DEFAULT_ROUTES,validate_routes
 from extract import redact
-from label_schema import LEGACY, VERSIONS, version, resolve_run_schema
+from task_label_schema import LEGACY, VERSIONS, version, resolve_run_schema
 
 class DecisionRequest(BaseModel):
     model_config=ConfigDict(extra='forbid')
@@ -44,7 +44,7 @@ def create_app(run='real-history-v1',routes=None,minimum_confidence=.9,collect_p
     def contract(recommendation_available=True):
         gate=state.get('gate',{'passed':False,'mode':'shadow','status':'not-loaded'})
         allowed='engine' in state and mode=='execution' and gate['passed'] is True and recommendation_available
-        return {'schema_version':2,'label_schema_version':selected,'mode':mode,'quality_gate_passed':gate['passed'],
+        return {'schema_version':2,'task_label_schema_version':selected,'mode':mode,'quality_gate_passed':gate['passed'],
                 'quality_gate_mode':gate['mode'],'quality_gate_status':gate['status'],
                 'execution_allowed':allowed,'advisory_only':not allowed}
     @asynccontextmanager
