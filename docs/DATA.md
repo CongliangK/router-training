@@ -59,6 +59,77 @@ cases (architecture design, novel methodology, cross-module root cause,
 safety/concurrency correctness, adversarial final review). Long prompts are never
 an upgrade reason.
 
+## Unified cold-start schema and measured shadow (issue #8)
+
+The legacy command and its expert-only split algorithm remain unchanged. Opt in
+with `--unified` (expert-only is valid), or supply `--outcomes` to enable the
+unified outputs automatically. All tasks still require explicit prompt-only
+expert labels in the four recovery files; measured-only tasks without these
+understanding annotations fail closed. A measured selected tier is a candidate
+selection outcome, **not** a task-understanding annotation. Nothing derives
+`needs_vision`, `task_type`, or expert tier from success/failure, cost or routes.
+
+```sh
+# Structural preflight: standard library only, no torch/models, no writes/splits.
+python -S prepare.py --data /path/to/new-data --outcomes /path/to/outcomes.json \
+  --routes /path/to/candidate-routes.json --preflight
+# Prepare a NEW dataset directory; existing prepare outputs are overwritten.
+python prepare.py --data /path/to/new-data --outcomes /path/to/outcomes.json \
+  --routes /path/to/candidate-routes.json
+# Expert-only unified output is also supported.
+python prepare.py --data /path/to/new-data --unified
+```
+
+`--outcomes` accepts the **full schema-v2 audit JSON from `outcomes.py`**, not a
+bare measured-label JSONL or an execution plan. Explicit `--routes` must match
+the preregistered candidate-set fingerprint. Structural validation replays the
+existing exact one-sided lower-bound gate from candidate metrics and trial
+metadata; it checks completeness, source/evidence, candidate operating-point
+fingerprints, the deterministic selection rule, and gate/audit consistency.
+Missing/conflicting sources, duplicate task IDs or IDs within either label
+source, incomplete expert coverage/understanding, and ungated or tampered
+measured labels are rejected. The same task ID across expert and measured
+sources is an intentional join, not a duplicate. Pending outcomes stay pending;
+they never create labels. An envelope must cover the supplied task corpus,
+including its pending IDs. Preflight checks structure, **not** split feasibility,
+execution authenticity, preregistration timing or independence.
+
+Additional outputs (all local data, subject to the same privacy boundary):
+
+| Output | Contents |
+|---|---|
+| `unified-labels.jsonl` | One task ID per row; `schema_version: 1`, explicit expert `task_understanding` (complete original label with `label_source`), nullable original `measured_candidate_outcomes` label, `cold_start_training_source: expert_provisional`, and nullable `candidate_success_probabilities` |
+| `measured-shadow.jsonl` | Only gate-passing measured rows; original task, measured `label`, separate expert `task_understanding`, `partition: measured_shadow`, expert split/group association, complete per-task candidate metrics/trial details and bound/preregistration metadata |
+| `measured-evidence.json` | Complete original outcomes envelope, including pending records, routes fingerprint, trial/gate metadata and estimand (only written when `--outcomes` is supplied) |
+
+The train/calibration/test files and `expert-labels.jsonl` remain **expert-only**,
+byte-identical for the same expert/tasks/seed regardless of measured evidence.
+Shadow records retain both the route operating-point `route_fingerprint` and the
+candidate-set `preregistration.routes_fingerprint`. Trial details are local audit
+evidence, not public examples. Existing training consumes none of these new
+files; schema unification does not authorize measured losses or success heads.
+
+Cold start trains the task-understanding layer on expert judgments, using
+measured data only for validation/shadow comparison. Expert `confidence` is
+confidence in the tier judgment; measured `confidence` is an interval confidence
+level and **must never become an expert-confidence sample weight** (#19).
+`candidate_success_probabilities: null` reserves a future conditional-success
+head; empirical rates and lower bounds stay in the measured evidence and are
+not silently promoted to calibrated probabilities. Genuine measured supply
+and validity/independence acceptance remain in #26. Synthetic CPU fixtures
+verify plumbing only and must not be described as real measurements. Frozen
+v3c config/artifacts and the training/serving paths are untouched.
+
+中文：新增 `--unified` / `--outcomes` 统一可溯源入口，默认冷启动仍只用专家标签训练，
+measured 单独进入影子分区，绝不自动混入 loss。每个任务仍须四轮文件中的显式专家任务理解
+标签，不能由 outcome 或实测选择的 tier 臆造 needs_vision/task_type/专家 tier。
+`--outcomes` 必须提供完整 v2 审计 JSON 和显式 `--routes`；预检重放既有门禁并核对
+来源、指纹、候选完整性、试验与门禁元数据，拒绝缺失/矛盾来源、源内重复 ID、缺失理解字段
+及未过门禁结果。专家与实测同 ID 是有意关联。`--preflight` 仅 stdlib、无 torch/模型、
+不切分也不写文件；不证明切分可行、真实性或独立性。实测 confidence 是区间置信水平而非
+专家样本权重。未来条件成功率字段当前为 null。新增文件均为本地敏感数据；mock 测试不是
+真实供给，真实 measured 有效性由 #26 验收。既有 v3c 与专家切分保持不变。
+
 ## Schema: `synth/*.jsonl` (optional augmentation)
 
 Rows need only `prompt`, `description`, `group`, `project`, and an embedded

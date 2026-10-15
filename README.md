@@ -103,6 +103,22 @@ evidence remains required (#26); frozen-v1/private prediction verification is
 external acceptance (#27). Synthetic CPU tests establish metric behavior, not
 real model improvement or production readiness.
 
+## Unified label intake and cold start (issue #8)
+
+`prepare.py --outcomes <full-v2-audit.json> --routes <candidate-routes.json>`
+accepts gated candidate outcomes alongside explicit expert understanding labels.
+Training/calibration/test remain expert-only; measured labels go into a separate
+traceable shadow partition with route fingerprints and trial/gate metadata.
+No understanding fields are inferred from outcomes. Measured confidence is an
+interval confidence level, never an expert sample weight. A future per-candidate
+success-probability field is reserved as null, not fitted from mock evidence.
+Add `--preflight` for stdlib-only validation (no torch, models, splitting or
+writes); `--unified` also supports expert-only intake. See [the schema and
+commands](docs/DATA.md#unified-cold-start-schema-and-measured-shadow-issue-8).
+Legacy expert splits and frozen v3c remain unchanged. Genuine measured supply
+and validity remain external acceptance in #26; synthetic CPU tests are not
+real measurements or production qualification.
+
 ## Repository layout
 
 | Path | Purpose |

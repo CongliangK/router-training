@@ -13,9 +13,16 @@ def grams(prompt):
     text = re.sub(r'\s+', '', prompt.lower())
     return {text[i:i+5] for i in range(max(0,len(text)-4))}
 
-def prepare(root: Path, seed=20261010, similarity=.88):
+def prepare(root: Path, seed=20261010, similarity=.88, *, outcomes=None, routes=None, unified=False, preflight=False):
     tasks=load(root/'tasks.jsonl'); labels=[]
     for n in range(1,5): labels.extend(load(root/f'expert-recovery-{n}.jsonl'))
+    from label_schema import unify
+    records,shadow=unify(tasks,labels,outcomes,routes)
+    unified=unified or outcomes is not None
+    if preflight:
+        summary={'status':'structurally_valid','tasks':len(tasks),'expert_training_rows':len(labels),
+                 'measured_shadow_rows':len(shadow),'models_loaded':False,'outputs_written':False}
+        print(json.dumps(summary,sort_keys=True));return summary
     assert len({r['id'] for r in labels})==len(labels), 'duplicate expert labels'
     by_id={r['id']:r for r in labels}
     assert set(by_id)=={r['id'] for r in tasks}, 'label coverage differs from task ids'
@@ -76,10 +83,31 @@ def prepare(root: Path, seed=20261010, similarity=.88):
     report['dataset_sha256']=hashlib.sha256((root/'tasks.jsonl').read_bytes()).hexdigest()
     report['group_disjoint']=True; report['historical_model_labels_used']=False
     report['limitations']=['Only two independent roots contain vision-positive tasks; visual confidence calibration is not supported by a fully independent third root.', 'Expert imitation metrics do not establish candidate-model task success.']
+    if unified:
+        report['label_schema_version']=1
+        report['cold_start_training_source']='expert_provisional'
+        report['measured_shadow_rows']=len(shadow)
+        split_by_id={r['id']:(name,r['split_group']) for name,rows in splits.items() for r in rows}
+        for row in shadow:
+            row['expert_split'],row['split_group']=split_by_id[row['id']]
+        for filename,rows in [('unified-labels.jsonl',records),('measured-shadow.jsonl',shadow)]:
+            (root/filename).write_text(''.join(json.dumps(r,ensure_ascii=False,allow_nan=False)+'\n' for r in sorted(rows,key=lambda r:r['id'])))
+        if outcomes is not None:
+            (root/'measured-evidence.json').write_text(json.dumps(outcomes,ensure_ascii=False,indent=2,allow_nan=False)+'\n')
     (root/'split-report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
     (root/'expert-labels.jsonl').write_text(''.join(json.dumps(r,ensure_ascii=False)+'\n' for r in sorted(labels,key=lambda r:r['id'])))
     print(json.dumps(report,ensure_ascii=False,indent=2))
 
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--data',type=Path,default=Path(__file__).parent/'data');p.add_argument('--seed',type=int,default=20261010)
-    a=p.parse_args();prepare(a.data,a.seed)
+    p.add_argument('--unified',action='store_true',help='Write traceable unified labels and a separate measured shadow partition')
+    p.add_argument('--outcomes',type=Path,help='Full outcomes.py v2 audit JSON, never a bare measured label list')
+    p.add_argument('--routes',type=Path,help='Explicit candidate routes matching the measured preregistration')
+    p.add_argument('--preflight',action='store_true',help='Validate structure/gate only; no splitting, outputs, torch or models')
+    a=p.parse_args()
+    if a.outcomes and not a.routes:p.error('--outcomes requires --routes')
+    if a.routes and not a.outcomes:p.error('--routes requires --outcomes')
+    evidence=json.loads(a.outcomes.read_text()) if a.outcomes else None
+    if a.outcomes and not isinstance(evidence,dict):p.error('--outcomes requires a full v2 audit object')
+    prepare(a.data,a.seed,outcomes=evidence,
+            routes=json.loads(a.routes.read_text()) if a.routes else None,unified=a.unified,preflight=a.preflight)
