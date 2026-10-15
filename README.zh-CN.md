@@ -73,6 +73,28 @@ Bootstrap 从完整字段有效样本池按整个 `split_group` 重采样，包�
 这个独立评估约束。真实候选任务成功证据仍由 #26 验收；frozen-v1/私有预测复核属于
 #27 的外部验收。合成 CPU 测试只证明指标行为，不代表真实模型改善或生产就绪。
 
+## CPU 研究协议（Refs #21、Refs #26；两项均保持开放）
+
+新增 [OOF/CRC/soup 契约](oof_protocol.py) 与 [级联协议](cascade_protocol.py)
+仅是**开发原型，不是生产资格认证**。按审计后的完整根组划折，强制显式
+train/calibration 来源、tier/vision 支持度与每折独立 fit/A/B/C 角色，保留逐行逐 epoch 来源。相关 OOF 不是固定模型的独立校准证据；soup 仅检查参数元数据，
+不加载或平均权重，禁止用 OOF 阈值给重训/soup 模型继承保证。
+
+CRC 阶跃损失求解器仅在固定模型、交换单位等明确假设下讨论**期望风险**，
+不宣称高概率/逐组条件风险保证；未获批或支持不足时输出 exploratory/infeasible。
+根组优先的级联抽样预注册候选身份、预算、停止规则与独立固定确认样本；
+相关重复/选择性补测不得套 IID CP，也不得变成逐任务 measured 标签。
+根组等权的 Hoeffding/Bonferroni 运算仅作受限有限抽样框诊断，不认证真实覆盖率；
+草案哈希和审批引用也不证明协议已获批或根组独立。
+合成结果始终 unqualified/shadow；现有 outcomes 与生产准入门完全不变。
+
+详见[可预注册协议及外部验收台账](research/cpu-protocols-21-26.md)。
+[纯合成 CPU 演示](scripts/protocol_demo.py) 不接受模型/数据路径，不训练、不执行真实候选：
+
+```sh
+CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python scripts/protocol_demo.py
+```
+
 ## 版本化路由策略与回放（issues #6 / #23）
 
 默认保留保守的 `legacy-v1` 视觉策略，不修改实际候选能力。显式选择
