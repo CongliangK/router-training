@@ -369,6 +369,30 @@ gates are not relaxed to make it pass; additional group-isolated development
 data is required. Full dev-no-test for training and the approved numeric
 protocol are not yet satisfied — this repo does not claim training readiness.
 
+### Offline tau / nested logit calibration (issues #1 / #22)
+
+CPU research tools now share a strict aligned **raw tier-logit** contract:
+[wise_ft_calibrate.py](scripts/wise_ft_calibrate.py) searches alpha/T/continuous
+dual thresholds using nested LOGO; every outer group's labels are excluded from
+all selection, and inner validation groups fit neither T nor thresholds.
+[tau_ablation.py](scripts/tau_ablation.py) scans tau=0/0.5/1/1.5/2 at fixed,
+predeclared T, requiring a bound train prior and explicit versioned relative-cost
+table, with paired group uncertainty and support-aware conclusions. Route-cost
+means use exact counts/rational weights and one final binary64 rounding, preserving
+finite positive small/subnormal spend even with a huge unused route. Inadequate
+support/infeasible constraints fail closed; no same-pool fitted evaluation,
+relaxed fallback, test selection, or serving product is produced.
+
+**Reproduction note:** these are separate opt-in, standard-library-only tools;
+existing runs/training/policy are unchanged. Public fixtures are synthetic only;
+never copy private raw logits here. Logit ensembling is **not WiSE-FT weight
+interpolation**; optional weight soup is skipped. Actual private replay, research
+targets and #1's causal training ablation remain unavailable, not completed.
+See the [input/protocol guide](docs/OFFLINE-CALIBRATION.md) and
+[tau protocol/unavailable-results table](research/tau-ablation.md). A new
+preregistration cannot restore frozen-v1's historically lost pristine-holdout
+status. No real numerical improvement or statistical guarantee is asserted.
+
 ### Training reproducibility fixes (issue #14)
 
 Four audited defects are fixed for **future runs**; the archived v3c artifacts
