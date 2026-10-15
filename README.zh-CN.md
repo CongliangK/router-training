@@ -73,6 +73,26 @@ Bootstrap 从完整字段有效样本池按整个 `split_group` 重采样，包�
 这个独立评估约束。真实候选任务成功证据仍由 #26 验收；frozen-v1/私有预测复核属于
 #27 的外部验收。合成 CPU 测试只证明指标行为，不代表真实模型改善或生产就绪。
 
+## 版本化路由策略与回放（issues #6 / #23）
+
+默认保留保守的 `legacy-v1` 视觉策略，不修改实际候选能力。显式选择
+`positive-v2` 时必须独立提供 `vision_positive_threshold`（服务参数
+`--vision-policy positive-v2 --vision-positive-threshold <值>`），不提供未经校准的
+生产默认阈值。图片始终强制视觉；概率缺失/非法一律保守要求视觉。决策新增版本化
+结构原因与 model/required/selected 档位，无候选拒绝也携带原因，不放松
+shadow/execution 门禁。已声明的可选身份/effort 元数据原样透传，**不代表后端
+已执行 effort 补偿**。
+
+```sh
+CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void python policy_replay.py \
+  --synthetic --output /tmp/policy-synthetic.json
+```
+
+纯 CPU 回放支持 `--input` 指定获授权的本地 JSONL、阈值敏感性、模拟 balanced
+视觉候选、视觉漏判/拒绝率与可选显式成本估计。合成比例不是实际回放、真实节省或
+候选能力证据；私有输入/输出留本地且不进入公开 checkout。真实回放、能力确认与
+阈值风险权衡仍由 #27 外部验收。详见[策略契约与回放输入格式](docs/POLICY-REPLAY.md)。
+
 ## 双来源标签与冷启动（issue #8）
 
 `prepare.py --outcomes <完整v2审计.json> --routes <候选routes.json>` 接收已过门禁的
