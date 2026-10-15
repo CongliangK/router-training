@@ -18,6 +18,16 @@ def _require(condition, message):
     if not condition:raise ValueError(message)
 
 
+def finite_json(value, *, context='payload', **kwargs):
+    """Serialize the WHOLE payload, including otherwise ignored audit metadata."""
+    try:
+        text=json.dumps(value,ensure_ascii=False,allow_nan=False,**kwargs)
+        text.encode('utf-8')  # Reject lone surrogates before a later file write.
+        return text
+    except (TypeError,ValueError,OverflowError,RecursionError,UnicodeError) as error:
+        raise ValueError(f'{context} must be finite UTF-8 JSON') from error
+
+
 def _index(rows, kind):
     result={}
     for row in rows:
@@ -31,6 +41,7 @@ def _index(rows, kind):
 
 def validate_experts(tasks, labels):
     """Require explicit understanding coverage, never fill it from outcome tiers."""
+    finite_json(tasks,context='tasks');finite_json(labels,context='expert labels')
     tasks_by_id=_index(tasks,'tasks'); experts=_index(labels,'expert labels')
     _require(bool(tasks_by_id), 'empty task corpus')
     _require(tasks_by_id.keys()==experts.keys(), 'expert task-understanding coverage differs from task ids')
@@ -54,6 +65,7 @@ def validate_measured(tasks, envelope, routes):
     production guarantee. Local evidence still requires review under issue #26.
     Bare measured label lists are deliberately insufficient evidence.
     """
+    finite_json(envelope,context='measured evidence');finite_json(routes,context='routes')
     try:
         _require(isinstance(envelope,dict) and envelope.get('schema_version')==2, 'measured evidence requires outcomes schema v2')
         _require(routes is not None, 'measured evidence requires explicit routes')
@@ -93,6 +105,7 @@ def unify(tasks, experts, measured=None, routes=None):
     Candidate success probabilities reserve a future conditional-success head;
     observed rates/bounds remain evidence, never calibrated head targets.
     """
+    finite_json(routes,context='routes')
     by_id=validate_experts(tasks,experts)
     measured_by_id=validate_measured(tasks,measured,routes) if measured is not None else {}
     unified=[];shadow=[]

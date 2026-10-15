@@ -81,7 +81,11 @@ measured 单独输出可追溯影子分区，保留 route 指纹及试验/门禁
 臆造任务理解字段。实测 confidence 是区间置信水平，绝不是专家样本权重。
 预留的每候选成功率字段当前为 null，不把 mock 结果拟成成功率头。
 加 `--preflight` 可仅用 stdlib 结构预检（无 torch/模型、不切分、不写文件）；
-`--unified` 也支持纯专家入口。[schema 与命令详见 DATA](docs/DATA.md#unified-cold-start-schema-and-measured-shadow-issue-8)。
+`--unified` 也支持纯专家入口。统一模式要求全新输出包；已有任意统一输出则所有模式
+（含预检/纯专家重跑）均拒绝。迁移或换语料/证据须新建目录仅复制输入，不自动删除数据。
+无统一输出时，默认专家模式仍覆盖五个普通输出文件。任意元数据须为有限数值 UTF-8 JSON，
+校验/序列化完成才写出（非崩溃、I/O 或并发事务）。
+[schema、精确覆盖策略与迁移详见 DATA](docs/DATA.md#output-lifecycle-and-migration)。
 既有专家切分及冻结 v3c 不变。真实 measured 供给与有效性仍由 #26 外部验收；
 合成 CPU 测试不是真实测量或生产资格证明。
 

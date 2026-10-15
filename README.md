@@ -113,8 +113,13 @@ No understanding fields are inferred from outcomes. Measured confidence is an
 interval confidence level, never an expert sample weight. A future per-candidate
 success-probability field is reserved as null, not fitted from mock evidence.
 Add `--preflight` for stdlib-only validation (no torch, models, splitting or
-writes); `--unified` also supports expert-only intake. See [the schema and
-commands](docs/DATA.md#unified-cold-start-schema-and-measured-shadow-issue-8).
+writes); `--unified` also supports expert-only intake. Unified mode requires a
+fresh output bundle; any existing unified output blocks **all** modes, even
+preflight/expert-only reruns. Migrate or change corpus/evidence in a new directory
+with input files only; nothing is auto-deleted. Legacy-only runs still replace
+their five regular outputs. All metadata must be finite UTF-8 JSON; validation
+and serialization finish before writes (not a crash/I/O/concurrency transaction).
+See [schema, exact overwrite policy and migration](docs/DATA.md#output-lifecycle-and-migration).
 Legacy expert splits and frozen v3c remain unchanged. Genuine measured supply
 and validity remain external acceptance in #26; synthetic CPU tests are not
 real measurements or production qualification.

@@ -23,8 +23,11 @@ data/
 ```
 
 and produces `train.jsonl`, `calibration.jsonl`, `test.jsonl`, `expert-labels.jsonl`,
-`split-report.json`. Final splits have already been generated here and are frozen;
-re-running `prepare.py --data <dir>` re-splits from scratch (overwrites outputs).
+`split-report.json`. Final splits have already been generated here and are frozen.
+Legacy expert-only `prepare.py --data <dir>` still re-splits from scratch and
+replaces these five regular output files, **only if no unified output exists**.
+Unified bundles use the stricter fresh-directory policy below; never re-prepare
+frozen data or change inputs in an existing unified bundle.
 
 ## Schema: `tasks.jsonl`
 
@@ -73,7 +76,7 @@ selection outcome, **not** a task-understanding annotation. Nothing derives
 # Structural preflight: standard library only, no torch/models, no writes/splits.
 python -S prepare.py --data /path/to/new-data --outcomes /path/to/outcomes.json \
   --routes /path/to/candidate-routes.json --preflight
-# Prepare a NEW dataset directory; existing prepare outputs are overwritten.
+# Prepare a NEW dataset directory; ALL existing prepare outputs are refused.
 python prepare.py --data /path/to/new-data --outcomes /path/to/outcomes.json \
   --routes /path/to/candidate-routes.json
 # Expert-only unified output is also supported.
@@ -91,8 +94,38 @@ source, incomplete expert coverage/understanding, and ungated or tampered
 measured labels are rejected. The same task ID across expert and measured
 sources is an intentional join, not a duplicate. Pending outcomes stay pending;
 they never create labels. An envelope must cover the supplied task corpus,
-including its pending IDs. Preflight checks structure, **not** split feasibility,
-execution authenticity, preregistration timing or independence.
+including its pending IDs. Every input tree, including arbitrary nested/ignored
+metadata in tasks, expert labels, routes and the full outcomes envelope, must be
+finite UTF-8 JSON (no NaN/infinity, unserializable objects or lone surrogates).
+Preflight checks this and output-path conflicts as well as structure, **not**
+split feasibility, execution authenticity, preregistration timing or independence.
+
+### Output lifecycle and migration
+
+- `--unified` or `--outcomes` requires **none** of the eight named prepare outputs
+  to exist: the five legacy files above plus the three files below. Even one
+  unknown/partial file, directory, or dangling symlink at those names is refused;
+  new unified outputs are opened exclusively, never overwritten.
+- If **any** of the three unified output names exists, **all modes**, including
+  ordinary expert-only and `--preflight`, refuse that directory. An expert-only
+  rerun cannot silently retain old measured evidence or clear just its shadow.
+  Fresh expert-only `--unified` creates empty shadow and null outcomes, and does
+  not create `measured-evidence.json`.
+- To migrate legacy outputs to unified schema, change corpus/evidence, or rerun a
+  unified bundle, create a new directory and copy only the input `tasks.jsonl`
+  and four `expert-recovery-N.jsonl` files (plus optional input `synth/`). Supply
+  the intended outcomes/routes explicitly. Do **not** copy old generated outputs
+  or replace inputs in the old bundle. No force flag, inferred ownership, automatic
+  deletion, or destructive cleanup is provided; unrelated filenames are untouched.
+- Without unified files, default expert-only runs keep the historical five-file
+  overwrite behavior and byte format for archived reproduction. Symlinks and
+  directories at those five output names are refused before any writes.
+- All expected validation and JSON/UTF-8 serialization errors occur before any
+  output is opened; every output is serialized in memory first. This is **not a
+  multi-file filesystem transaction**: I/O errors, crashes or concurrent writers
+  can still leave partial outputs. There is no locking or input snapshot. Use one
+  writer and stable inputs per directory; inspect/preserve a partial directory
+  and retry in a new one. No files are automatically removed after failure.
 
 Additional outputs (all local data, subject to the same privacy boundary):
 
@@ -129,6 +162,13 @@ measured 单独进入影子分区，绝不自动混入 loss。每个任务仍须
 不切分也不写文件；不证明切分可行、真实性或独立性。实测 confidence 是区间置信水平而非
 专家样本权重。未来条件成功率字段当前为 null。新增文件均为本地敏感数据；mock 测试不是
 真实供给，真实 measured 有效性由 #26 验收。既有 v3c 与专家切分保持不变。
+统一模式要求上述八个输出名均不存在；已有任意统一输出时，所有模式（含预检和普通专家
+模式）均拒绝，绝不自动删除或部分清理旧数据。迁移/换语料/换证据/重跑须新建目录，仅复制
+输入任务与四轮专家标签（及可选 synth），不可复制旧输出或在旧包内更换输入。无统一输出时，
+默认专家模式仍按历史行为覆盖五个普通文件，但拒绝输出符号链接/目录。任意嵌套元数据也须
+可序列化为有限数值 UTF-8 JSON；所有校验/序列化完成后才打开输出。并非多文件事务：I/O
+失败、进程中断及并发仍可能留下部分包；无锁/输入快照，不自动回滚删除，须保留检查后换新
+目录重试。
 
 ## Schema: `synth/*.jsonl` (optional augmentation)
 
