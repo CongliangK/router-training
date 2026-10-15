@@ -8,6 +8,22 @@ An **aggregate profile** of the frozen dataset (class distributions, cross-tabs,
 group structure, known skews, and a run-metrics comparison — no raw data) for
 analysis without the raw rows is in [DATA-PROFILE.md](DATA-PROFILE.md).
 
+## Label versions (#18)
+
+The tables below describe the historical **v1** input format, not permission to
+rewrite frozen data. Default/unversioned products retain seven task types.
+Opt-in `router-label-v2` has six task types, yes/no-only supervised vision,
+`label_status: resolved`, and an explicit top-level `task_label_schema_version`.
+Ambiguity stays in a separate adjudication/excluded ledger; never coerce uncertain.
+V2 prepare requires `--output` to a new separate directory. The
+[versioned contract](LABEL-SCHEMA.md) documents prepare/preflight/train/serve/evaluate
+flags and checkpoint metadata. The [15 invented creative+vision examples](../data/synthetic-examples/labels-v2-creative-vision.jsonl)
+are split-independent supplemental-only, not real support or automatic augmentation.
+Real six-uncertain and 16-creative blind reviews remain outstanding; #18 is OPEN.
+
+中文：下表为历史 v1。六类/二值 v2 必须显式声明版本、resolved 并写新目录；
+待裁定/排除不入监督，合成补充不算真实独立组支持；真实复核与无泄漏验收仍未完成。
+
 ## Dataset layout expected by the pipeline
 
 `prepare.py` consumes a directory (default `data/`) containing:

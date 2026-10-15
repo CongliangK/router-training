@@ -6,6 +6,7 @@ Source group/root identifiers and row contents are deliberately not exported.
 import collections
 from evaluation_metrics import metrics, target
 from model_utils import QUESTIONS
+from task_label_schema import LEGACY, check_row_versions, resolve_run_schema
 
 NOTICE='frozen-v1, known skew / frozen-v1，已知偏斜'
 LIMITS=[
@@ -84,6 +85,15 @@ def summary(evaluation):
 
 
 def split_report(source,rows=None):
+    # This reader makes frozen-v1/seven-class claims even without predictions.
+    # Guard BEFORE aggregate counting and ALL early returns, not only metrics().
+    if not isinstance(source,dict):raise ValueError('split report input must be an object')
+    check_row_versions([source],LEGACY)
+    if 'label_schema' in source:
+        if not isinstance(source['label_schema'],dict):raise ValueError('complete label schema metadata required')
+        resolve_run_schema({'label_schema':source['label_schema']},requested=LEGACY)
+    if rows is not None:
+        rows=list(rows);check_row_versions(rows,LEGACY)
     result={'schema_version':1,'dataset_notice':NOTICE,'limitations':list(LIMITS),
             'aggregate_input_counts':aggregate_counts(source),
             'prediction_scope':'caller-supplied test rows only; frozen scores, no fitting or selection',

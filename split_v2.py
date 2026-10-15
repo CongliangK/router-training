@@ -32,6 +32,9 @@ def _canonical(value):return json.dumps(value,ensure_ascii=False,sort_keys=True,
 
 
 def _validate(tasks,labels):
+    from task_label_schema import check_row_versions
+    check_row_versions(tasks)
+    check_row_versions([{'label':label} for label in labels])
     if not tasks:raise ValueError('tasks must be nonempty')
     for row in tasks:
         if not isinstance(row,dict) or any(not _valid_text(row.get(k)) for k in ('id','group','prompt')):

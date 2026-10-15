@@ -751,7 +751,7 @@ class TrainEvalAdapterTests(unittest.TestCase):
         roles_config = make_roles(rows)
         plan = train_eval.build_grouped_plan(rows, roles_config)
         prior = cg.compute_prior(make_train_rows(), 'tier', SCHEMA)
-        scored = [{'id': r['id'], 'label': dict(r['label']),
+        scored = [{'id': r['id'], 'split_group': r['split_group'], 'label': dict(r['label']),
                    'answers': {'tier': {'logits': r['logits']['tier']},
                                'vision': {'logits': r['logits']['vision']}},
                    'latency_ms': 1.0}

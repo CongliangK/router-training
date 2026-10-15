@@ -31,11 +31,22 @@ def check_outputs(root, unified):
                 raise ValueError(f'legacy output {name} must be a regular file, not a symlink or directory')
 
 
-def prepare(root: Path, seed=20261010, similarity=.88, *, outcomes=None, routes=None, unified=False, preflight=False):
+def prepare(root: Path, seed=20261010, similarity=.88, *, outcomes=None, routes=None, unified=False, preflight=False, schema_version=None, output=None):
+    from task_label_schema import version, V2
+    selected=version(schema_version)
+    if selected==V2:
+        if outcomes is not None or routes is not None or unified or preflight:
+            raise ValueError("router-label-v2 does not support unified/measured intake or prepare preflight")
+        from prepare_task_v2 import prepare_task_v2
+        return prepare_task_v2(root,seed,similarity,schema_version=selected,output=output)
+    if output is not None:raise ValueError("v1 frozen prepare does not support separate output")
     tasks=load(root/'tasks.jsonl'); labels=[]
     for n in range(1,5): labels.extend(load(root/f'expert-recovery-{n}.jsonl'))
     from label_schema import finite_json, unify
     finite_json({'seed':seed,'similarity':similarity},context='split parameters')
+    from task_label_schema import check_row_versions
+    check_row_versions(tasks)
+    check_row_versions([{'label':label} for label in labels])
     records,shadow=unify(tasks,labels,outcomes,routes)
     unified=unified or outcomes is not None
     check_outputs(root,unified)
@@ -138,7 +149,15 @@ def main(argv=None):
     p.add_argument('--outcomes',type=Path,help='frozen-v1 only: full outcomes.py v2 audit JSON, never a bare measured label list')
     p.add_argument('--routes',type=Path,help='frozen-v1 only: explicit candidate routes matching the measured preregistration')
     p.add_argument('--preflight',action='store_true',help='frozen-v1 only: validate finite JSON, structure/gate and output conflicts; no splitting, writes, torch or models')
+    from task_label_schema import LEGACY, V2, VERSIONS
+    p.add_argument('--label-schema',choices=VERSIONS,default=LEGACY)
     a=p.parse_args(argv)
+    if a.label_schema==V2:
+        if a.split_version!='frozen-v1' or a.unified or a.outcomes or a.routes or a.preflight:
+            p.error('router-label-v2 does not support split-v2, unified/measured intake or prepare preflight')
+        if a.data is None or a.output is None:p.error('router-label-v2 requires explicit --data and --output')
+        prepare(a.data,a.seed,schema_version=a.label_schema,output=a.output)
+        return 0
     if a.split_version=='split-v2':
         # These contracts have distinct output lifecycles. Never silently drop
         # measured evidence or turn a requested no-write preflight into a split.

@@ -8,6 +8,36 @@
 
 路由器只打分、不生成任务答案：固定选项 logits 决策，训练与服务共用同一条确定性截断链路（8K 上下文，超长走头/尾保留 + `[ROUTING_CONTEXT_TRUNCATED]` 标记）。
 
+## 显式六类标签（#18，仅公开 CPU 子集）
+
+默认/无版本 checkpoint 仍用**原样七类 v1 问题**；显式
+`--label-schema router-label-v2` 才选择六类 task_type 与 yes/no 视觉监督。
+未知/混合版本、checkpoint 问题哈希或类别顺序不符均硬失败。
+主要交付为可执行代码/脚本/样式表时优先 implementation；非编程创作/鉴赏才是
+creative。视觉动作不明、uncertain 无证据时保留待裁定/排除，不能强制二值化。
+
+详见[版本 API 与 CLI 契约](docs/LABEL-SCHEMA.md)和[标注标准](data/labeling/RUBRIC.md)。
+v2 prepare 只写新的独立目录；预检/训练/问题/运行元数据/服务/评估均携带版本；
+v2 服务加载前核对 run 与 calibration 的完整 schema 元数据。
+[15 条明确虚构的 creative+vision 例子](data/synthetic-examples/labels-v2-creative-vision.jsonl)
+（旗舰 4 条）**独立于 split，仅作补充**，不是实际任务、真实独立组支持或实测改善；
+不自动导入，不属于校准/测试。v3c 配方与冻结产物不变。
+**#18 仍 OPEN**：六条真实 uncertain 证据复核、16 条 creative 盲审、真实新版本溯源、
+组支持与无泄漏验收仍不可用。本变更不代表训练/冒烟/模型加载授权。
+
+
+与已合入的 #8 集成时来源 API 与任务语义分离：`label_schema_version` 仍为来源整数 1，
+`task_label_schema_version` 才是 router-label-v1/v2。v1 冻结/统一来源及专家 split-v2 保留；
+v2 仅支持旧切分算法的专家新目录，v2+统一/实测/prepare预检/split-v2 均在写入前拒绝。
+详见[完整支持矩阵](docs/LABEL-SCHEMA.md#composed-interface-matrix-8--18--24)。
+#8 已批准并合入上游（用户提供的集成状态：main `32ad23a`）；本轮 #18 修复仍须对最终 SHA 全新独立完整红队。
+
+v2 数据集预检与运行须先核对两个 prepare 元数据文档的完整问题哈希、类别顺序、语义版本，
+之后才允许采样/输出/模型工作。相对数据、补充、角色及配方路径统一在调用者目录解析一次。
+预测适配器打分前校验输入语义，保留仅训练/来源溯源标记，补充例子不能变成评估支持。
+按组校准将新鲜 B 组 logits 按锁定 ID/组/标签关联后拟合（旧计划分数误用缺陷继承自 #2）。
+冻结 v1 报告拒绝 v2 聚合及行输入（含无预测行）；v2 run 如实记录诊断不可用，评估请用显式版本 metrics API。
+
 ## 为什么值得看
 
 模型本身不稀奇，稀奇的是周围的工程：
@@ -114,6 +144,12 @@ CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void python policy_replay.py \
 视觉候选、视觉漏判/拒绝率与可选显式成本估计。合成比例不是实际回放、真实节省或
 候选能力证据；私有输入/输出留本地且不进入公开 checkout。真实回放、能力确认与
 阈值风险权衡仍由 #27 外部验收。详见[策略契约与回放输入格式](docs/POLICY-REPLAY.md)。
+
+#18 服务现已组合 #6/#23（取代标签 schema 文档中此前的待集成状态说明）。
+`create_app` 分别接受仅关键字参数 `label_schema`、`vision_policy`、
+`vision_positive_threshold`，服务 CLI 全部透传。两种任务 schema 均可独立配合两种视觉策略；
+默认仍为七类 v1 与保守 legacy 视觉策略。完整 v2 run/calibration 身份仍须在加载后端前核对。
+本次集成须对最终 SHA 全新独立完整红队，既有批准不转移。
 
 ## 双来源标签与冷启动（issue #8）
 

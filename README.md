@@ -12,6 +12,46 @@ flagship), `needs_vision` (yes / no), and `task_type` (7 classes) — which a ca
 map onto concrete model routes. The router never generates task answers; it only
 scores fixed decision options from the model's logits.
 
+## Opt-in six-task labels (#18; public CPU subset)
+
+Default/unversioned checkpoints still use the **unchanged seven-type v1 questions**.
+Explicit `--label-schema router-label-v2` selects six task types and yes/no vision;
+unknown/mixed versions or incompatible checkpoint question hashes fail closed.
+Executable code/scripts/stylesheets take precedence over a creative subject;
+nonprogramming creation/appreciation is creative. Ambiguous visual actions and
+unresolved vision remain adjudication/excluded, never forced binary.
+
+See the [versioned API and CLI contract](docs/LABEL-SCHEMA.md) and
+[labeling rubric](data/labeling/RUBRIC.md). Prepare writes v2 only to a new separate
+directory; preflight/train/model questions/run metadata/serve/evaluation carry the
+selected version. V2 serving requires matching run + calibration schema metadata.
+The [15 clearly synthetic creative+vision examples](data/synthetic-examples/labels-v2-creative-vision.jsonl)
+(4 flagship) are **split-independent supplemental only**, not real support or
+measured improvement; no automatic ingestion or calibration/test membership.
+Frozen v3c recipe/artifacts are unchanged. **#18 remains OPEN**: six real uncertain
+reviews, 16 creative blinded reviews, real version provenance/group support and
+no-leak acceptance are unavailable. No training, smoke or model loading is implied.
+
+
+Integration with merged #8 keeps its intake API separate from task semantics:
+`label_schema_version` remains source integer 1; `task_label_schema_version`
+identifies router-label-v1/v2. V1 frozen/unified and expert-only split-v2 remain
+available. V2 supports expert-only new outputs with the frozen-v1 split algorithm;
+v2 + unified/measured/prepare-preflight/split-v2 fails closed before writes.
+See the [exact supported matrix](docs/LABEL-SCHEMA.md#composed-interface-matrix-8--18--24).
+Upstream #8 is approved/merged (main `32ad23a`, supplied integration status);
+this #18 fix still needs a fresh independent full red-team of its final SHA.
+
+V2 dataset preflight/runtime require matching complete question hash, ordered classes
+and semantic version in both prepared schema documents before sampling/output/model
+work. Relative launch inputs (dataset, supplements, roles, recipe) resolve once in the
+caller's directory. Prediction adapters validate input semantics before scoring and
+retain train-only/source provenance; supplements cannot become evaluation support.
+Grouped calibration fits fresh role-B logits joined against locked IDs/groups/labels
+(the repaired stale-planning-score defect was inherited from #2). The frozen-v1
+report reader rejects v2 aggregates and rows, including unscored inputs; v2 runs
+record an unavailable diagnostic instead. Use the explicit versioned metrics API.
+
 ## Why this exists
 
 Multi-agent harnesses waste money and latency when every subtask goes to the largest
@@ -153,6 +193,14 @@ optional explicit cost estimates. Synthetic results are not actual replay, real
 savings, or candidate capability evidence. Private inputs/outputs stay local and
 outside public checkouts; #27 retains real replay/capability/risk acceptance.
 See [policy contract and replay input schema](docs/POLICY-REPLAY.md).
+
+The #18 server composition now includes #6/#23 (superseding the earlier pending
+integration notes in the label-schema document). `create_app` accepts independent
+keyword-only `label_schema`, `vision_policy`, and `vision_positive_threshold`;
+the server CLI forwards all three. Either task schema works with either vision
+policy; defaults remain seven-task v1 and conservative legacy vision. Complete v2
+run/calibration identity is still checked before backend loading. This integration
+needs a fresh full independent review of its final SHA; no prior approval transfers.
 
 ## Unified label intake and cold start (issue #8)
 
