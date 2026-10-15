@@ -80,6 +80,23 @@ def prepare(root: Path, seed=20261010, similarity=.88):
     (root/'expert-labels.jsonl').write_text(''.join(json.dumps(r,ensure_ascii=False)+'\n' for r in sorted(labels,key=lambda r:r['id'])))
     print(json.dumps(report,ensure_ascii=False,indent=2))
 
-if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('--data',type=Path,default=Path(__file__).parent/'data');p.add_argument('--seed',type=int,default=20261010)
-    a=p.parse_args();prepare(a.data,a.seed)
+# Explicit new entry points; the frozen prepare() algorithm/defaults above stay unchanged.
+from split_v2 import prepare_v2, split_v2
+
+
+def main():
+    p=argparse.ArgumentParser();p.add_argument('--data',type=Path,default=None);p.add_argument('--seed',type=int,default=20261010)
+    p.add_argument('--split-version',choices=['frozen-v1','split-v2'],default='frozen-v1')
+    p.add_argument('--output',type=Path,help='split-v2 only: fresh, nonexistent bundle directory (parent must exist)')
+    a=p.parse_args()
+    if a.split_version=='split-v2':
+        if a.data is None or a.output is None:p.error('split-v2 requires explicit --data and --output')
+        report=prepare_v2(a.data,a.output,seed=a.seed)
+        print(json.dumps(report,ensure_ascii=False,indent=2))
+        return 0 if report['status']=='feasible' else 2
+    if a.output is not None:p.error('--output requires --split-version split-v2')
+    prepare(a.data if a.data is not None else Path(__file__).parent/'data',a.seed)
+    return 0
+
+
+if __name__=='__main__':raise SystemExit(main())
