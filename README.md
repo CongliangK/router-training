@@ -126,6 +126,31 @@ savings, or candidate capability evidence. Private inputs/outputs stay local and
 outside public checkouts; #27 retains real replay/capability/risk acceptance.
 See [policy contract and replay input schema](docs/POLICY-REPLAY.md).
 
+## Unified label intake and cold start (issue #8)
+
+`prepare.py --outcomes <full-v2-audit.json> --routes <candidate-routes.json>`
+accepts gated candidate outcomes alongside explicit expert understanding labels.
+Training/calibration/test remain expert-only; measured labels go into a separate
+traceable shadow partition with route fingerprints and trial/gate metadata.
+No understanding fields are inferred from outcomes. Measured confidence is an
+interval confidence level, never an expert sample weight. A future per-candidate
+success-probability field is reserved as null, not fitted from mock evidence.
+Add `--preflight` for stdlib-only validation (no torch, models, splitting or
+writes); `--unified` also supports expert-only intake. These flags use the
+default/explicit `--split-version frozen-v1`. Combining split-v2 with any
+`--unified`, `--outcomes`, `--routes`, or `--preflight` explicitly fails before
+input reads/writes; measured input is never silently ignored. `--output` is
+split-v2-only. See the [supported flag matrix](docs/DATA.md#cli-coexistence-unified-intake-vs-split-v2).
+Unified mode requires a fresh output bundle; any existing unified output blocks
+**all frozen-v1 modes**, even preflight/expert-only reruns. Migrate or change corpus/evidence in a new directory
+with input files only; nothing is auto-deleted. Legacy-only runs still replace
+their five regular outputs. All metadata must be finite UTF-8 JSON; validation
+and serialization finish before writes (not a crash/I/O/concurrency transaction).
+See [schema, exact overwrite policy and migration](docs/DATA.md#output-lifecycle-and-migration).
+Legacy expert splits and frozen v3c remain unchanged. Genuine measured supply
+and validity remain external acceptance in #26; synthetic CPU tests are not
+real measurements or production qualification.
+
 ## Repository layout
 
 | Path | Purpose |
@@ -463,6 +488,36 @@ Code and documentation: **Apache-2.0** (see [LICENSE](LICENSE), [NOTICE](NOTICE)
 The base model is upstream Apache-2.0; redistributed fine-tuned checkpoints inherit
 its obligations. Real task data is not covered by this license because it is not
 distributed.
+
+### Opt-in split-v2 (CPU, issue #24)
+
+The historical/default `prepare()` and frozen outputs are unchanged. New entry
+points `prepare.split_v2(tasks, labels, ...)` (pure) and
+`prepare.prepare_v2(root, output, ...)` (fresh bundle) are stdlib-only:
+
+```sh
+CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void python prepare.py \
+  --split-version split-v2 --data /path/to/new-expert-inputs \
+  --output /path/to/nonexistent-split-v2-bundle
+```
+
+A new directory holds versioned `*.split-v2.jsonl` and
+`split-report.split-v2.json`; all existing output paths are refused. Roots and
+transitive cross-root near-duplicate components stay indivisible. Every selected
+split has largest component share **≤35%**; the gate is never weakened. Scoring
+adds vision=yes and task_type proportion penalties and reports targets, actual
+proportions/deviations, class support and descriptive Kish concentration — **not
+independent effective sample size or independence proof**. Jaccard <.88 does not
+establish independence; child sessions/time windows cannot authorize root splitting.
+
+Provable impossibility returns `infeasible`; bounded heuristic failure returns
+`search_exhausted`, **not a proof**. Either writes only a new diagnostic report
+(exit 2), never a relaxed split. See [DATA.md](docs/DATA.md#opt-in-split-v2-cpu-development-issue-24)
+for objective weights, exhaustive/heuristic budgets and the API contract.
+**A changed test set is not directly comparable to historical frozen-v1 metrics.**
+No real re-split or vision improvement is claimed: #24 is synthetic CPU development;
+versioned labels (#18) and real distribution/.35 feasibility/version review remain
+external acceptance in #27. Training data paths are not switched automatically.
 
 ### Frozen-test sensitivity (CPU, issue #4)
 

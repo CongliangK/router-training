@@ -22,9 +22,13 @@ data/
   synth/*.jsonl             # optional synthetic augmentation (train only)
 ```
 
-and produces `train.jsonl`, `calibration.jsonl`, `test.jsonl`, `expert-labels.jsonl`,
-`split-report.json`. Final splits have already been generated here and are frozen;
-re-running `prepare.py --data <dir>` re-splits from scratch (overwrites outputs).
+The historical/default (`--split-version frozen-v1`) path produces `train.jsonl`,
+`calibration.jsonl`, `test.jsonl`, `expert-labels.jsonl`, `split-report.json`.
+Legacy expert-only `prepare.py --data <dir>` still re-splits from scratch and
+replaces these five regular output files, **only if no unified output exists**.
+Unified bundles use the stricter fresh-directory policy below; never re-prepare
+frozen data or change inputs in an existing unified bundle. The expert-only
+split-v2 opt-in writes a separate new versioned bundle, not these legacy outputs.
 
 ## Schema: `tasks.jsonl`
 
@@ -59,6 +63,115 @@ cases (architecture design, novel methodology, cross-module root cause,
 safety/concurrency correctness, adversarial final review). Long prompts are never
 an upgrade reason.
 
+## Unified cold-start schema and measured shadow (issue #8)
+
+The legacy command and its expert-only split algorithm remain unchanged. This
+intake uses the default/explicit `--split-version frozen-v1`. Opt in
+with `--unified` (expert-only is valid), or supply `--outcomes` to enable the
+unified outputs automatically. All tasks still require explicit prompt-only
+expert labels in the four recovery files; measured-only tasks without these
+understanding annotations fail closed. A measured selected tier is a candidate
+selection outcome, **not** a task-understanding annotation. Nothing derives
+`needs_vision`, `task_type`, or expert tier from success/failure, cost or routes.
+
+```sh
+# Structural preflight: standard library only, no torch/models, no writes/splits.
+python -S prepare.py --data /path/to/new-data --outcomes /path/to/outcomes.json \
+  --routes /path/to/candidate-routes.json --preflight
+# Prepare a NEW dataset directory; ALL existing prepare outputs are refused.
+python prepare.py --data /path/to/new-data --outcomes /path/to/outcomes.json \
+  --routes /path/to/candidate-routes.json
+# Expert-only unified output is also supported.
+python prepare.py --data /path/to/new-data --unified
+```
+
+`--outcomes` accepts the **full schema-v2 audit JSON from `outcomes.py`**, not a
+bare measured-label JSONL or an execution plan. Explicit `--routes` must match
+the preregistered candidate-set fingerprint. Structural validation replays the
+existing exact one-sided lower-bound gate from candidate metrics and trial
+metadata; it checks completeness, source/evidence, candidate operating-point
+fingerprints, the deterministic selection rule, and gate/audit consistency.
+Missing/conflicting sources, duplicate task IDs or IDs within either label
+source, incomplete expert coverage/understanding, and ungated or tampered
+measured labels are rejected. The same task ID across expert and measured
+sources is an intentional join, not a duplicate. Pending outcomes stay pending;
+they never create labels. An envelope must cover the supplied task corpus,
+including its pending IDs. Every input tree, including arbitrary nested/ignored
+metadata in tasks, expert labels, routes and the full outcomes envelope, must be
+finite UTF-8 JSON (no NaN/infinity, unserializable objects or lone surrogates).
+Preflight checks this and output-path conflicts as well as structure, **not**
+split feasibility, execution authenticity, preregistration timing or independence.
+
+### Output lifecycle and migration
+
+- `--unified` or `--outcomes` requires **none** of the eight named prepare outputs
+  to exist: the five legacy files above plus the three files below. Even one
+  unknown/partial file, directory, or dangling symlink at those names is refused;
+  new unified outputs are opened exclusively, never overwritten.
+- If **any** of the three unified output names exists, **all frozen-v1 modes**,
+  including ordinary expert-only and `--preflight`, refuse that directory. An expert-only
+  rerun cannot silently retain old measured evidence or clear just its shadow.
+  Fresh expert-only `--unified` creates empty shadow and null outcomes, and does
+  not create `measured-evidence.json`.
+- To migrate legacy outputs to unified schema, change corpus/evidence, or rerun a
+  unified bundle, create a new directory and copy only the input `tasks.jsonl`
+  and four `expert-recovery-N.jsonl` files (plus optional input `synth/`). Supply
+  the intended outcomes/routes explicitly. Do **not** copy old generated outputs
+  or replace inputs in the old bundle. No force flag, inferred ownership, automatic
+  deletion, or destructive cleanup is provided; unrelated filenames are untouched.
+- Without unified files, default expert-only runs keep the historical five-file
+  overwrite behavior and byte format for archived reproduction. Symlinks and
+  directories at those five output names are refused before any writes.
+- All expected validation and JSON/UTF-8 serialization errors occur before any
+  output is opened; every output is serialized in memory first. This is **not a
+  multi-file filesystem transaction**: I/O errors, crashes or concurrent writers
+  can still leave partial outputs. There is no locking or input snapshot. Use one
+  writer and stable inputs per directory; inspect/preserve a partial directory
+  and retry in a new one. No files are automatically removed after failure.
+
+Additional outputs (all local data, subject to the same privacy boundary):
+
+| Output | Contents |
+|---|---|
+| `unified-labels.jsonl` | One task ID per row; `schema_version: 1`, explicit expert `task_understanding` (complete original label with `label_source`), nullable original `measured_candidate_outcomes` label, `cold_start_training_source: expert_provisional`, and nullable `candidate_success_probabilities` |
+| `measured-shadow.jsonl` | Only gate-passing measured rows; original task, measured `label`, separate expert `task_understanding`, `partition: measured_shadow`, expert split/group association, complete per-task candidate metrics/trial details and bound/preregistration metadata |
+| `measured-evidence.json` | Complete original outcomes envelope, including pending records, routes fingerprint, trial/gate metadata and estimand (only written when `--outcomes` is supplied) |
+
+The train/calibration/test files and `expert-labels.jsonl` remain **expert-only**,
+byte-identical for the same expert/tasks/seed regardless of measured evidence.
+Shadow records retain both the route operating-point `route_fingerprint` and the
+candidate-set `preregistration.routes_fingerprint`. Trial details are local audit
+evidence, not public examples. Existing training consumes none of these new
+files; schema unification does not authorize measured losses or success heads.
+
+Cold start trains the task-understanding layer on expert judgments, using
+measured data only for validation/shadow comparison. Expert `confidence` is
+confidence in the tier judgment; measured `confidence` is an interval confidence
+level and **must never become an expert-confidence sample weight** (#19).
+`candidate_success_probabilities: null` reserves a future conditional-success
+head; empirical rates and lower bounds stay in the measured evidence and are
+not silently promoted to calibrated probabilities. Genuine measured supply
+and validity/independence acceptance remain in #26. Synthetic CPU fixtures
+verify plumbing only and must not be described as real measurements. Frozen
+v3c config/artifacts and the training/serving paths are untouched.
+
+中文：新增 `--unified` / `--outcomes` 统一可溯源入口，默认冷启动仍只用专家标签训练，
+measured 单独进入影子分区，绝不自动混入 loss。每个任务仍须四轮文件中的显式专家任务理解
+标签，不能由 outcome 或实测选择的 tier 臆造 needs_vision/task_type/专家 tier。
+`--outcomes` 必须提供完整 v2 审计 JSON 和显式 `--routes`；预检重放既有门禁并核对
+来源、指纹、候选完整性、试验与门禁元数据，拒绝缺失/矛盾来源、源内重复 ID、缺失理解字段
+及未过门禁结果。专家与实测同 ID 是有意关联。`--preflight` 仅 stdlib、无 torch/模型、
+不切分也不写文件；不证明切分可行、真实性或独立性。实测 confidence 是区间置信水平而非
+专家样本权重。未来条件成功率字段当前为 null。新增文件均为本地敏感数据；mock 测试不是
+真实供给，真实 measured 有效性由 #26 验收。既有 v3c 与专家切分保持不变。
+统一模式要求上述八个输出名均不存在；已有任意统一输出时，所有 frozen-v1 模式（含预检和
+普通专家模式）均拒绝，绝不自动删除或部分清理旧数据。迁移/换语料/换证据/重跑须新建目录，仅复制
+输入任务与四轮专家标签（及可选 synth），不可复制旧输出或在旧包内更换输入。无统一输出时，
+默认专家模式仍按历史行为覆盖五个普通文件，但拒绝输出符号链接/目录。任意嵌套元数据也须
+可序列化为有限数值 UTF-8 JSON；所有校验/序列化完成后才打开输出。并非多文件事务：I/O
+失败、进程中断及并发仍可能留下部分包；无锁/输入快照，不自动回滚删除，须保留检查后换新
+目录重试。
+
 ## Schema: `synth/*.jsonl` (optional augmentation)
 
 Rows need only `prompt`, `description`, `group`, `project`, and an embedded
@@ -66,7 +179,98 @@ Rows need only `prompt`, `description`, `group`, `project`, and an embedded
 Synthetic rows join **train only** — never calibration or test — so temperatures
 and the tau operating point are not fitted on synthetic lexical shortcuts.
 
-## Splitting guarantees (what `prepare.py` enforces)
+## CLI coexistence: unified intake vs split-v2
+
+No combination silently ignores a requested input or switches output policy:
+
+| Split version | Other flags | Behavior |
+|---|---|---|
+| omitted or `frozen-v1` | none (optional `--data`, `--seed`) | Historical expert-only split/bytes; five regular outputs may be replaced only without unified outputs |
+| omitted or `frozen-v1` | `--unified` | Fresh unified bundle; experts only, empty shadow |
+| omitted or `frozen-v1` | `--outcomes` **and** `--routes`, optionally `--unified` | Gated measured audit intake; expert-only splits plus measured shadow; fresh bundle |
+| omitted or `frozen-v1` | `--preflight` with any supported row above | Same finite UTF-8/schema/gate/output-conflict checks; no split search or writes |
+| omitted or `frozen-v1` | only one of `--outcomes` / `--routes`, or any `--output` | Explicit CLI error before input reads or writes |
+| `split-v2` | explicit `--data` **and** `--output`, optional `--seed` | Expert-only versioned bundle; fixed atomic/.35 constraints; exit 0 feasible, 2 diagnostic-only |
+| `split-v2` | any `--unified`, `--outcomes`, `--routes`, or `--preflight` (alone or together), or missing either path | Explicit CLI error before input reads or writes; unified intake/preflight is **not supported** with split-v2 |
+
+The split-v2 input directory may contain historical/generated files: only tasks
+and four expert recovery inputs are read; no old unified/measured output is
+validated, carried forward, or copied to its separate destination. This is not
+measured intake or migration. To validate measured evidence, use frozen-v1
+`--outcomes` + `--routes` (optionally `--preflight`) in an input-only directory.
+The Python APIs remain separate: `prepare(...)` supports unified/preflight;
+`prepare_v2(...)` / `split_v2(...)` accept only their documented split options,
+not unified/preflight/outcomes/routes keywords.
+
+中文：默认/显式 frozen-v1 支持统一标签、成对 outcomes/routes 及无写入预检；
+`--output` 仅适用于 split-v2。split-v2 必须显式指定输入与全新输出，且不支持
+`--unified`、`--outcomes`、`--routes`、`--preflight` 的任何组合，解析即明确报错，
+不先读输入或写文件、不忽略实测证据、不把预检变成实际切分。split-v2 只读任务和四轮
+专家输入，不核验或复制源目录的既有统一/实测输出，也不表示迁移了实测数据。
+
+## Opt-in split-v2 (CPU development, issue #24)
+
+```sh
+CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void python prepare.py \
+  --split-version split-v2 --data /path/to/new-expert-inputs \
+  --output /path/to/nonexistent-split-v2-bundle --seed 20261010
+```
+
+Both paths must be explicit; the output parent must already exist. The entire
+output directory must be **new** (existing files, directories and symlinks are
+refused). It contains `train.split-v2.jsonl`, `calibration.split-v2.jsonl`,
+`test.split-v2.jsonl`, `expert-labels.split-v2.jsonl` and
+`split-report.split-v2.json`; there is no overwrite switch. Failure to find a
+feasible assignment writes **only** the new versioned diagnostic report and exits
+2; feasible exits 0. I/O/validation errors fail nonzero; an interrupted partial
+bundle is not reusable. Historical files/artifacts are never destinations.
+
+`prepare.prepare_v2(root, output, **options)` is the file API;
+`prepare.split_v2(tasks, labels, seed=20261010, similarity=.88, attempts=12000)`
+returns `(splits_or_None, aggregate_report)` without I/O. Both are also exposed
+by the stdlib-only `split_v2` module. Input expert schemas remain as above (not
+candidate-execution labels); `uncertain` is counted separately, never silently
+relabelled. These APIs do not load models or change training's data paths.
+
+Root `group` plus all cross-root near-duplicate edges form **connected components**,
+including transitive links through different tasks in the same root. Normalized
+(lowercase, whitespace removed) character-5-gram Jaccard ≥.88 links roots; exact
+normalized short prompts also link, but unrelated empty gram sets do not. The
+whole root/component always stays together. Child sessions or >2h windows can
+only be descriptive subgroups; finer isolation requires external provenance
+review and a new protocol. Jaccard <.88 is **not** independence evidence.
+
+Candidates must have three nonempty splits, each with largest component / split
+rows **≤.35**, checked with exact integer arithmetic. This cap is fixed: no
+threshold weakening and no component/root splitting to inflate support. The
+objective adds absolute row-fraction deviations from 70/15/15 (weight 1), tier
+proportion deviations (.15), **vision=yes proportion** deviations (1), and all
+seven task_type proportion deviations (.5), relative to whole-input proportions.
+These are soft targets, not coverage/improvement guarantees. The report gives
+those targets, weights, actual counts/proportions, signed deviations, max share,
+constraint excess, objective terms, and per-class component support (including
+absent/rare classes). A diagnostic candidate is explicitly **not selected**.
+
+With ≤9 components search is exhaustive; otherwise it checks 12,000 seeded
+candidates, including one balanced-component starting assignment. Simple necessary
+bounds (fewer than 9 components, or a component exceeding .35 of the entire
+corpus) or complete enumeration can return `status: infeasible` with
+`proven_infeasible: true`. Bounded failure returns `status: search_exhausted`,
+**not a proof of infeasibility**. Larger search budgets can be supplied through
+the Python API; the .35 gate never changes. A feasible heuristic candidate does
+not prove objective optimality. Determinism includes input-order invariance.
+The canonical input SHA-256 binds supplied tasks+labels, not a private-data replay.
+
+`kish_group_size_concentration = n² / Σ component_size²` is descriptive
+concentration, **not** a statistically independent effective sample size.
+Neither root/component counts nor a larger Kish number prove independence.
+No real re-split was performed for #24. Versioned label hygiene depends on #18;
+real distributions, .35 feasibility and dataset-version review remain external
+acceptance in #27. **Changing the test set invalidates direct comparison with
+historical frozen-v1 metrics**; retain both dataset/report versions separately.
+Synthetic old/new comparisons test behavior only, not real vision improvement.
+
+## Historical/default splitting guarantees (`prepare.py`)
 
 - Splits are **group-disjoint**: all tasks from one session (or near-duplicate
   cluster, 5-gram Jaccard ≥ 0.88) land in exactly one of train/calibration/test.
