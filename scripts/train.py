@@ -173,6 +173,14 @@ def main():
     parser.add_argument('--label-schema',choices=VERSIONS,default=LEGACY,help='Opt-in six-task v2; unversioned products stay seven-task v1')
     parser.add_argument('--supplemental',type=Path,action='append',help='Explicit v2 synthetic supplemental JSONL (train only)')
     args = parser.parse_args()
+    # Resolve identity ONCE in the original caller cwd, before validation or
+    # forwarding. The child runs under ROOT, so relative strings would otherwise
+    # select different files. Absent options still emit no new legacy flags.
+    args.data_dir=Path(args.data_dir).resolve()
+    if args.roles is not None:args.roles=Path(args.roles).resolve()
+    if args.recipe is not None:args.recipe=Path(args.recipe).resolve()
+    if args.research_config is not None:args.research_config=Path(args.research_config).resolve()
+    if args.supplemental:args.supplemental=[path.resolve() for path in args.supplemental]
     if args.legacy and args.label_schema!=LEGACY:parser.error('--legacy requires router-label-v1')
     if args.supplemental and args.label_schema!=V2:parser.error('--supplemental requires router-label-v2')
     if not args.run.replace('-', '').replace('_', '').isalnum():
@@ -241,7 +249,7 @@ def main():
     command = [sys.executable, str(ROOT / 'train_eval.py'), '--run', args.run,
                '--calibration-roles', str(roles_path)]
     command.extend(recipe_flags(recipe))
-    if research:command.extend(['--research-config', str(Path(args.research_config).resolve()),'--label-schema',args.label_schema])
+    if research:command.extend(['--research-config', str(args.research_config),'--label-schema',args.label_schema])
     if args.label_schema==V2:
         if recipe['synth']:parser.error('v2 requires explicit --recipe {"synth": false}; legacy synth is incompatible')
         command.extend(['--label-schema',args.label_schema,'--data-dir',str(args.data_dir)])

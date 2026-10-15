@@ -3,7 +3,7 @@
 Fixtures are invented, test files are canaries, and every launcher call is dry-run
 or patched to forbid a subprocess. Numerical capacity/loss tests remain separate.
 """
-import argparse, ast, contextlib, copy, importlib.util, io, json, sys, tempfile, unittest
+import argparse, ast, contextlib, copy, importlib.util, io, json, os, sys, tempfile, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -177,6 +177,79 @@ class RuntimeCompositionTests(unittest.TestCase):
                     with self.assertRaises(ValueError):te.run(args)
                     model.assert_not_called();sampler.assert_not_called()
                 self.assertFalse((root/'artifacts').exists())
+
+
+class RepairedIntegrationGuards(unittest.TestCase):
+    def test_research_relative_config_is_resolved_once_before_validation_and_forwarding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);data=root/'dataset';data.mkdir();_,roles=fixture(data)
+            recipe=root/'research.json';recipe.write_text(json.dumps(config()))
+            moved=root/'changed-cwd';moved.mkdir();previous=Path.cwd()
+            original=rt.load_config;calls=[]
+            def read_config(path):
+                calls.append(path);result=original(path);os.chdir(moved);return result
+            try:
+                os.chdir(root)
+                flags=['train.py','--run','integration-repaired-path','--roles','dataset/roles.json',
+                       '--data-dir','dataset','--research-config','research.json','--dry-run']
+                with mock.patch.object(sys,'argv',flags),mock.patch.object(rt,'load_config',side_effect=read_config),mock.patch.object(launcher.subprocess,'call',side_effect=AssertionError('NO LAUNCH')),contextlib.redirect_stdout(io.StringIO()) as out:
+                    self.assertEqual(launcher.main(),0)
+                command=ast.literal_eval(next(s.split('Command:',1)[1] for s in out.getvalue().splitlines() if s.startswith('Command:')))
+                self.assertEqual(calls,[recipe.resolve()])
+                self.assertEqual(command[command.index('--research-config')+1],str(recipe.resolve()))
+                self.assertEqual(command[command.index('--calibration-roles')+1],str(roles.resolve()))
+                self.assertEqual(command[command.index('--label-schema')+1],ls.LEGACY)
+                self.assertFalse((ROOT/'artifacts/integration-repaired-path').exists())
+            finally:os.chdir(previous)
+
+    def test_v2_research_rejects_before_even_dataset_metadata_gate(self):
+        te=f.import_train_eval_with_stubs()
+        args=argparse.Namespace(label_schema=ls.V2,research_config='never-read.json')
+        with mock.patch.object(te,'validate_dataset_schema',side_effect=AssertionError('NO METADATA')) as metadata,mock.patch.object(rt,'load_config',side_effect=AssertionError('NO CONFIG')) as reader,mock.patch.object(Path,'mkdir',side_effect=AssertionError('NO OUTPUT')):
+            with self.assertRaisesRegex(ValueError,'research is unsupported'):te.run(args)
+            metadata.assert_not_called();reader.assert_not_called()
+
+    def test_nonresearch_v2_metadata_precedes_all_data_optimizer_sampler_model_output(self):
+        for name in ('label-schema.json','split-report.json'):
+            with self.subTest(document=name),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);data=root/'data';data.mkdir();fixture(data)
+                # One valid document cannot substitute for the other; no rows are read.
+                meta=ls.metadata(ls.V2)
+                (data/name).write_text(json.dumps(meta if name=='label-schema.json' else {'label_schema':meta}))
+                te=f.import_train_eval_with_stubs()
+                args=argparse.Namespace(label_schema=ls.V2,research_config=None,synth=False,
+                    calibration_roles='never-read-roles.json',data_dir=data)
+                with mock.patch.object(te,'read_jsonl',side_effect=AssertionError('NO DATA')) as reader,mock.patch.object(te,'ensure_optimizer_available',side_effect=AssertionError('NO OPTIMIZER')) as optimizer,mock.patch.object(rt,'sample_epochs',side_effect=AssertionError('NO RESEARCH SAMPLER')) as sampler,mock.patch.object(te,'oversample_epoch_rows',side_effect=AssertionError('NO LEGACY SAMPLER')) as legacy_sampler,mock.patch.object(te,'load_engine',side_effect=AssertionError('NO MODEL')) as model,mock.patch.object(Path,'mkdir',side_effect=AssertionError('NO OUTPUT')):
+                    with self.assertRaisesRegex(ValueError,'both schema metadata'):te.run(args)
+                    for sentinel in (reader,optimizer,sampler,legacy_sampler,model):sentinel.assert_not_called()
+                self.assertFalse((root/'artifacts').exists())
+
+    def test_prediction_score_cannot_replace_identity_source_or_train_only_provenance(self):
+        te=f.import_train_eval_with_stubs()
+        for selected in (ls.LEGACY,ls.V2):
+            with self.subTest(selected=selected):
+                row=source_rows()[0]
+                row.update(prompt='INVENTED CPU-only provenance fixture',
+                    task_label_schema_version=selected,synthetic=True,supplemental_only=True,
+                    partition='synthetic_train_only',provenance={'invented':True,'origin':'CPU-only'})
+                row['label'].update(task_label_schema_version=selected,label_status='resolved')
+                before=copy.deepcopy(row);answers={}
+                for head,question in ls.questions_for(selected,questions_from_source()).items():
+                    labels=list(question['criteria']);choice=labels[0]
+                    answers[head]={'choice':choice,'confidence':1.,'probabilities':{c:float(c==choice) for c in labels},'logits':[float(c==choice) for c in labels]}
+                injected={'answers':answers,'task_label_schema_version':selected,'id':'REPLACED',
+                    'label':{'tier':'flagship'},'split_group':'REPLACED','group':'REPLACED',
+                    'label_schema_version':1,'synthetic':False,'supplemental_only':False,
+                    'partition':'primary','provenance':{'invented':False}}
+                with mock.patch.object(te,'score',return_value=injected) as scorer:
+                    result=te.predict_rows(object(),[row],selected)[0]
+                scorer.assert_called_once_with(mock.ANY,row['prompt'],schema_version=selected)
+                self.assertEqual(row,before);self.assertNotIn('prompt',result)
+                for key,value in row.items():
+                    if key!='prompt':self.assertEqual(result[key],value)
+                if selected==ls.V2:
+                    from evaluation_metrics import metrics
+                    with self.assertRaisesRegex(ValueError,'supplemental'):metrics([result],schema_version=selected)
 
 
 if __name__=='__main__':unittest.main()

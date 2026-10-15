@@ -195,7 +195,11 @@ class BootstrapTests(unittest.TestCase):
 
     def test_predict_rows_preserves_source_group_without_inventing_one(self):
         te=train_eval();rows=[{**row(i),'prompt':'synthetic'} for i in range(2)];rows[1].pop('split_group')
-        with mock.patch.object(te,'score',return_value={'answers':{}}):scored=te.predict_rows(None,rows)
+        # The adapter now validates the score contract; grouping still must not
+        # be invented when absent. Supply legal toy logits, not an empty score.
+        prediction={'answers':copy.deepcopy(rows[0]['answers'])}
+        for answer in prediction['answers'].values():answer['logits']=list(answer['probabilities'].values())
+        with mock.patch.object(te,'score',return_value=prediction):scored=te.predict_rows(None,rows)
         self.assertEqual(scored[0]['split_group'],'group-0')
         self.assertNotIn('split_group',scored[1])
 

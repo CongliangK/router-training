@@ -78,6 +78,41 @@ def load_run_schema(directory, requested=LEGACY):
     return resolve_run_schema(calibration,run_metadata,requested)
 
 
+def validate_dataset_schema(directory, schema_version=LEGACY):
+    """Check prepared dataset identity before priors, sampling, model or writes.
+
+    V2 requires BOTH prepare declarations, not metadata regenerated at run time.
+    Legacy datasets may omit them; any explicit declaration still fails closed.
+    Source label_schema_version (integer 1) remains an independent namespace.
+    """
+    selected=version(schema_version);directory=Path(directory)
+    expected=metadata(selected);declarations=[]
+    for name in ('label-schema.json','split-report.json'):
+        path=directory/name
+        if not path.exists():
+            if selected==V2:raise ValueError('v2 dataset requires both schema metadata documents')
+            continue
+        try:document=json.loads(path.read_text(encoding='utf-8'))
+        except (OSError,ValueError):raise ValueError('dataset schema metadata must be readable UTF-8 JSON') from None
+        if not isinstance(document,dict):raise ValueError('dataset schema metadata must be an object')
+        if name=='split-report.json':
+            if 'label_schema_version' in document:
+                check_row_versions([{'label_schema_version':document['label_schema_version']}],LEGACY)
+            if 'task_label_schema_version' in document:
+                if version(document['task_label_schema_version'])!=selected:
+                    raise ValueError('dataset report semantic version differs from selected questions')
+            if 'label_schema' not in document:
+                if selected==V2:raise ValueError('v2 split report requires complete label_schema metadata')
+                continue
+            document=document['label_schema']
+        if document!=expected:
+            raise ValueError('dataset schema version/question fingerprint/ordered classes mismatch')
+        declarations.append(document)
+    if selected==V2 and len(declarations)!=2:
+        raise ValueError('v2 dataset requires consistent complete schema metadata')
+    return selected
+
+
 def check_row_versions(rows, schema_version=LEGACY):
     """Cheap boundary check also used by legacy metric readers."""
     selected=version(schema_version)
@@ -117,22 +152,27 @@ def validate_supervised_rows(rows, schema_version=LEGACY, allow_supplemental=Fal
             raise ValueError('v2 synthetic rows must be explicitly supplemental_only')
 
 
+def validate_score(prediction, schema_version=LEGACY, require_logits=True):
+    """Validate score semantics separately; never overwrite input provenance."""
+    selected=version(schema_version);check_row_versions([prediction],selected)
+    classes=metadata(selected)['classes'];answers=prediction.get('answers')
+    if not isinstance(answers,dict) or set(answers)!=set(classes):
+        raise ValueError('prediction needs all selected schema heads')
+    for head,labels in classes.items():
+        answer=answers[head]
+        if not isinstance(answer,dict) or answer.get('choice') not in labels or \
+                not isinstance(answer.get('probabilities'),dict) or set(answer['probabilities'])!=set(labels):
+            raise ValueError('prediction differs from selected label schema')
+        if require_logits or 'logits' in answer:
+            if not isinstance(answer.get('logits'),list) or len(answer['logits'])!=len(labels):
+                raise ValueError('prediction logit width differs from selected label schema')
+
+
 def validate_prediction_rows(rows, schema_version=LEGACY):
     """V2 cannot consume legacy seven-option logits/probabilities by accident."""
     validate_supervised_rows(rows,schema_version)
     if version(schema_version)!=V2:return
-    classes=metadata(V2)['classes']
-    for row in rows:
-        answers=row.get('answers')
-        if not isinstance(answers,dict) or set(answers)!=set(classes):
-            raise ValueError('v2 prediction needs all schema heads')
-        for head,labels in classes.items():
-            answer=answers[head]
-            if not isinstance(answer,dict) or answer.get('choice') not in labels or \
-                    set(answer.get('probabilities',{}))!=set(labels):
-                raise ValueError('prediction differs from selected label schema')
-            if 'logits' in answer and (not isinstance(answer['logits'],list) or len(answer['logits'])!=len(labels)):
-                raise ValueError('prediction logit width differs from selected label schema')
+    for row in rows:validate_score(row,schema_version,require_logits=False)
 
 
 def reviewed_task_type(primary_action, evidence=None):

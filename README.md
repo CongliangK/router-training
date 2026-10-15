@@ -33,14 +33,24 @@ reviews, 16 creative blinded reviews, real version provenance/group support and
 no-leak acceptance are unavailable. No training, smoke or model loading is implied.
 
 
-Integration with pending #8 keeps its intake API separate from task semantics:
+Integration with merged #8 keeps its intake API separate from task semantics:
 `label_schema_version` remains source integer 1; `task_label_schema_version`
 identifies router-label-v1/v2. V1 frozen/unified and expert-only split-v2 remain
 available. V2 supports expert-only new outputs with the frozen-v1 split algorithm;
 v2 + unified/measured/prepare-preflight/split-v2 fails closed before writes.
 See the [exact supported matrix](docs/LABEL-SCHEMA.md#composed-interface-matrix-8--18--24).
-The exact #8 candidate is a pending strong dependency, NOT approved/main; publication
-waits for independent upstream round-2 approval+merge and fresh full integrated review.
+Upstream #8 is approved/merged (main `32ad23a`, supplied integration status);
+this #18 fix still needs a fresh independent full red-team of its final SHA.
+
+V2 dataset preflight/runtime require matching complete question hash, ordered classes
+and semantic version in both prepared schema documents before sampling/output/model
+work. Relative launch inputs (dataset, supplements, roles, recipe) resolve once in the
+caller's directory. Prediction adapters validate input semantics before scoring and
+retain train-only/source provenance; supplements cannot become evaluation support.
+Grouped calibration fits fresh role-B logits joined against locked IDs/groups/labels
+(the repaired stale-planning-score defect was inherited from #2). The frozen-v1
+report reader rejects v2 aggregates and rows, including unscored inputs; v2 runs
+record an unavailable diagnostic instead. Use the explicit versioned metrics API.
 
 ## Why this exists
 
@@ -166,6 +176,65 @@ supply research supervision or confidence weights; old unversioned checkpoints
 retain legacy seven-question meaning. Final integration must also absorb compatible
 later policy/server changes and receive fresh red-team review; prior source reviews
 are not approval of this combined tree.
+
+## CPU research protocols (Refs #21, Refs #26 — both remain open)
+
+New [OOF/CRC/soup contracts](oof_protocol.py) and [cascade protocol](cascade_protocol.py)
+are **development prototypes, not production qualifications**. Whole audited-root
+folds require explicit train/calibration sources, feasible tier/vision support and
+independent per-fold fit/A/B/C roles with row/epoch provenance. Correlated OOF is
+not fixed-model calibration; soup descriptors are checked without loading or
+averaging weights, and OOF thresholds cannot certify a refit/soup model.
+
+The CRC step-loss solver states fixed-model/exchangeable-unit assumptions and
+expected-risk (not high-probability/per-group) scope. Unapproved or unsupported
+protocols stay exploratory/infeasible. Root-first cascade sampling freezes
+candidate identities, budgets, stopping and independent fixed confirmation;
+correlated repeats/selective supplements never become IID CP evidence or
+per-task measured labels. The equal-root Hoeffding/Bonferroni arithmetic is a
+restricted finite-frame diagnostic, not certified real-world coverage. Draft
+plan hashes and approval references do not verify approval or independence.
+Synthetic outputs always remain unqualified/shadow; existing outcomes and
+production gates are unchanged.
+
+See the [preregisterable contract and external acceptance ledger](research/cpu-protocols-21-26.md).
+The [synthetic-only CPU demonstration](scripts/protocol_demo.py) accepts no model
+or data paths and performs no training/execution:
+
+```sh
+CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python scripts/protocol_demo.py
+```
+
+## Versioned routing policy and replay (issues #6 / #23)
+
+The conservative `legacy-v1` vision policy remains the default; no real candidate
+capabilities change. Explicit opt-in `positive-v2` requires a separately supplied
+`vision_positive_threshold` (`--vision-policy positive-v2 --vision-positive-threshold
+<value>` in the server). No calibrated production threshold is supplied. Images
+always require vision; missing/invalid probabilities fail closed. Recommendations
+now include versioned structured reasons and model/required/selected tiers, including
+refusals, without weakening shadow/execution gates. Declared optional identity/effort
+metadata passes through unchanged; it does **not** mean backend effort was executed.
+
+```sh
+CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void python policy_replay.py \
+  --synthetic --output /tmp/policy-synthetic.json
+```
+
+The CPU-only replay supports authorized local JSONL via `--input`, threshold
+sensitivity, simulated balanced-vision candidates, vision FN/refusal rates and
+optional explicit cost estimates. Synthetic results are not actual replay, real
+savings, or candidate capability evidence. Private inputs/outputs stay local and
+outside public checkouts; #27 retains real replay/capability/risk acceptance.
+See [policy contract and replay input schema](docs/POLICY-REPLAY.md).
+
+The #18 server composition now includes #6/#23 (superseding the earlier pending
+integration notes in the label-schema document). `create_app` accepts independent
+keyword-only `label_schema`, `vision_policy`, and `vision_positive_threshold`;
+the server CLI forwards all three. Either task schema works with either vision
+policy; defaults remain seven-task v1 and conservative legacy vision. Complete v2
+run/calibration identity is still checked before backend loading. This integration
+needs a fresh full independent review of its final SHA; no prior approval transfers.
 
 ## Unified label intake and cold start (issue #8)
 

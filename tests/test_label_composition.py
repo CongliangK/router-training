@@ -94,10 +94,7 @@ class CompositionTests(unittest.TestCase):
         from scripts.validate_calibration import run_validation
         for selected in (semantic.LEGACY,semantic.V2):
             with tempfile.TemporaryDirectory() as tmp:
-                root=Path(tmp);_,_,roles=write_fixture(root)
-                if selected==semantic.LEGACY:
-                    calibration.write_jsonl(root/'train.jsonl',calibration.make_train_rows())
-                    calibration.write_jsonl(root/'calibration.jsonl',calibration.make_pool())
+                root=Path(tmp);_,_,roles=write_fixture(root,selected)
                 rows=prepare.load(root/'train.jsonl');rows[0]['partition']='measured_shadow'
                 calibration.write_jsonl(root/'train.jsonl',rows)
                 ok,text=run_validation(root,roles,selected)

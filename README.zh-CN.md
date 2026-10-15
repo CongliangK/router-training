@@ -26,11 +26,17 @@ v2 服务加载前核对 run 与 calibration 的完整 schema 元数据。
 组支持与无泄漏验收仍不可用。本变更不代表训练/冒烟/模型加载授权。
 
 
-与待验收 #8 集成时来源 API 与任务语义分离：`label_schema_version` 仍为来源整数 1，
+与已合入的 #8 集成时来源 API 与任务语义分离：`label_schema_version` 仍为来源整数 1，
 `task_label_schema_version` 才是 router-label-v1/v2。v1 冻结/统一来源及专家 split-v2 保留；
 v2 仅支持旧切分算法的专家新目录，v2+统一/实测/prepare预检/split-v2 均在写入前拒绝。
 详见[完整支持矩阵](docs/LABEL-SCHEMA.md#composed-interface-matrix-8--18--24)。
-#8 候选仍是待独立二轮批准并合入上游的强依赖，不是已批准/main；集成 SHA 需全新完整红队。
+#8 已批准并合入上游（用户提供的集成状态：main `32ad23a`）；本轮 #18 修复仍须对最终 SHA 全新独立完整红队。
+
+v2 数据集预检与运行须先核对两个 prepare 元数据文档的完整问题哈希、类别顺序、语义版本，
+之后才允许采样/输出/模型工作。相对数据、补充、角色及配方路径统一在调用者目录解析一次。
+预测适配器打分前校验输入语义，保留仅训练/来源溯源标记，补充例子不能变成评估支持。
+按组校准将新鲜 B 组 logits 按锁定 ID/组/标签关联后拟合（旧计划分数误用缺陷继承自 #2）。
+冻结 v1 报告拒绝 v2 聚合及行输入（含无预测行）；v2 run 如实记录诊断不可用，评估请用显式版本 metrics API。
 
 ## 为什么值得看
 
@@ -121,6 +127,54 @@ LM 头。task_type 仍只用于诊断，不参与生产路由；没有辅助损�
 `task_label_schema_version: "router-label-v1"`（或 v2）严格分离；measured 影子行不作
 研究监督或专家置信度权重，旧无版本 checkpoint 仍为七分类。
 父级最终集成还须吸收兼容的后续 policy/server 变更并重新红队审查；原分支 PASS 不是组合树批准。
+
+## CPU 研究协议（Refs #21、Refs #26；两项均保持开放）
+
+新增 [OOF/CRC/soup 契约](oof_protocol.py) 与 [级联协议](cascade_protocol.py)
+仅是**开发原型，不是生产资格认证**。按审计后的完整根组划折，强制显式
+train/calibration 来源、tier/vision 支持度与每折独立 fit/A/B/C 角色，保留逐行逐 epoch 来源。相关 OOF 不是固定模型的独立校准证据；soup 仅检查参数元数据，
+不加载或平均权重，禁止用 OOF 阈值给重训/soup 模型继承保证。
+
+CRC 阶跃损失求解器仅在固定模型、交换单位等明确假设下讨论**期望风险**，
+不宣称高概率/逐组条件风险保证；未获批或支持不足时输出 exploratory/infeasible。
+根组优先的级联抽样预注册候选身份、预算、停止规则与独立固定确认样本；
+相关重复/选择性补测不得套 IID CP，也不得变成逐任务 measured 标签。
+根组等权的 Hoeffding/Bonferroni 运算仅作受限有限抽样框诊断，不认证真实覆盖率；
+草案哈希和审批引用也不证明协议已获批或根组独立。
+合成结果始终 unqualified/shadow；现有 outcomes 与生产准入门完全不变。
+
+详见[可预注册协议及外部验收台账](research/cpu-protocols-21-26.md)。
+[纯合成 CPU 演示](scripts/protocol_demo.py) 不接受模型/数据路径，不训练、不执行真实候选：
+
+```sh
+CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python scripts/protocol_demo.py
+```
+
+## 版本化路由策略与回放（issues #6 / #23）
+
+默认保留保守的 `legacy-v1` 视觉策略，不修改实际候选能力。显式选择
+`positive-v2` 时必须独立提供 `vision_positive_threshold`（服务参数
+`--vision-policy positive-v2 --vision-positive-threshold <值>`），不提供未经校准的
+生产默认阈值。图片始终强制视觉；概率缺失/非法一律保守要求视觉。决策新增版本化
+结构原因与 model/required/selected 档位，无候选拒绝也携带原因，不放松
+shadow/execution 门禁。已声明的可选身份/effort 元数据原样透传，**不代表后端
+已执行 effort 补偿**。
+
+```sh
+CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void python policy_replay.py \
+  --synthetic --output /tmp/policy-synthetic.json
+```
+
+纯 CPU 回放支持 `--input` 指定获授权的本地 JSONL、阈值敏感性、模拟 balanced
+视觉候选、视觉漏判/拒绝率与可选显式成本估计。合成比例不是实际回放、真实节省或
+候选能力证据；私有输入/输出留本地且不进入公开 checkout。真实回放、能力确认与
+阈值风险权衡仍由 #27 外部验收。详见[策略契约与回放输入格式](docs/POLICY-REPLAY.md)。
+
+#18 服务现已组合 #6/#23（取代标签 schema 文档中此前的待集成状态说明）。
+`create_app` 分别接受仅关键字参数 `label_schema`、`vision_policy`、
+`vision_positive_threshold`，服务 CLI 全部透传。两种任务 schema 均可独立配合两种视觉策略；
+默认仍为七类 v1 与保守 legacy 视觉策略。完整 v2 run/calibration 身份仍须在加载后端前核对。
+本次集成须对最终 SHA 全新独立完整红队，既有批准不转移。
 
 ## 双来源标签与冷启动（issue #8）
 
