@@ -146,10 +146,21 @@ def validate_supervised_rows(rows, schema_version=LEGACY, allow_supplemental=Fal
         if label.get('tier') not in ('fast','balanced','flagship') or \
                 label.get('task_type') not in SIX_TYPES or label.get('needs_vision') not in ('yes','no'):
             raise ValueError('illegal v2 label; uncertain and visual require reviewed migration')
-        if row.get('supplemental_only') and not allow_supplemental:
-            raise ValueError('supplemental examples cannot supply real calibration/evaluation support')
-        if row.get('synthetic') and row.get('supplemental_only') is not True:
-            raise ValueError('v2 synthetic rows must be explicitly supplemental_only')
+        # Task and label provenance are independent boundaries: a clean task
+        # cannot turn a synthetic/supplemental label into primary supervision.
+        for obj in (row,label):
+            for key in ('synthetic','supplemental_only'):
+                if key in obj and type(obj[key]) is not bool:
+                    raise ValueError(f'v2 {key} provenance must be boolean')
+        synthetic=any(obj.get('synthetic') is True for obj in (row,label))
+        supplemental=any(obj.get('supplemental_only') is True for obj in (row,label))
+        if (synthetic or supplemental) and not allow_supplemental:
+            raise ValueError('synthetic/supplemental examples cannot supply primary supervision')
+        # Prior consumers exclude by the explicit outer synthetic marker.
+        # Allowing nested-only flags here would silently count them as real.
+        if (synthetic or supplemental) and (row.get('synthetic') is not True or
+                                           row.get('supplemental_only') is not True):
+            raise ValueError('v2 supplemental rows need top-level synthetic and supplemental_only true')
 
 
 def validate_score(prediction, schema_version=LEGACY, require_logits=True):
