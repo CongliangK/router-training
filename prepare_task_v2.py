@@ -9,8 +9,11 @@ TYPES = ['extraction', 'research', 'implementation', 'debugging', 'review', 'vis
 def load(path):
     return [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
 
+def _normalize(prompt):
+    return re.sub(r'\s+', '', prompt.lower())
+
 def grams(prompt):
-    text = re.sub(r'\s+', '', prompt.lower())
+    text = _normalize(prompt)
     return {text[i:i+5] for i in range(max(0,len(text)-4))}
 
 def prepare_task_v2(root: Path, seed=20261010, similarity=.88, schema_version=None, output=None):
@@ -49,14 +52,17 @@ def prepare_task_v2(root: Path, seed=20261010, similarity=.88, schema_version=No
     def union(a,b):
         a,b=find(a),find(b)
         if a!=b: parent[max(a,b)]=min(a,b)
-    sets=[grams(r['prompt']) for r in tasks]; near=[]
+    texts=[_normalize(r['prompt']) for r in tasks]
+    sets=[grams(text) for text in texts]; near=[]
     for i,a in enumerate(tasks):
         for j in range(i):
             b=tasks[j]
             if a['group']==b['group']:continue
             x,y=sets[i],sets[j]
-            if min(len(x),len(y))<similarity*max(len(x),len(y)):continue
-            score=len(x&y)/max(1,len(x|y))
+            # Equal normalized short prompts link; empty grams alone are not equality.
+            same=texts[i]==texts[j]
+            if not same and (not x or not y or min(len(x),len(y))<similarity*max(len(x),len(y))):continue
+            score=1. if same else len(x&y)/len(x|y)
             if score>=similarity:union(a['group'],b['group']);near.append([a['id'],b['id'],round(score,4)])
     # Exclude unresolved supervision only AFTER duplicate unions: pending rows
     # may still connect two active roots and must not erase leakage edges.
