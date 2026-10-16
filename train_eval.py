@@ -407,6 +407,10 @@ def run(args):
     # path still reads test for its historical report; the complete
     # dev-no-test rework for training is NOT satisfied by this change.
     datasets={name:read_jsonl(data_dir/f'{name}.jsonl') for name in (['train','calibration','test'] if legacy else ['train','calibration'])}
+    if not legacy:
+        # Issue #2: declared split/root isolation must precede any sampling.
+        from calibration_groups import validate_partition_isolation
+        isolation=validate_partition_isolation(datasets['train'],datasets['calibration'])
     for rows in datasets.values():validate_supervised_rows(rows,selected)
     additions=training_supplemental(supplement,[r for rows in datasets.values() for r in rows],selected)
     plan=None;protocol=None;roles=None;real_train_rows=None
@@ -424,7 +428,7 @@ def run(args):
             research_streams,research_plan=rt.sample_epochs(datasets['train'],research,args.seed,args.epochs)
         if args.structural_dry_run:
             from calibration_groups import anonymous_summary
-            print('STRUCTURAL DRY RUN (no model, no artifacts, no test access)',json.dumps(anonymous_summary(plan),ensure_ascii=False),flush=True)
+            print('STRUCTURAL DRY RUN (no model, no artifacts, no test access)',json.dumps({**anonymous_summary(plan),'root_isolation':isolation},ensure_ascii=False),flush=True)
             return
         output.mkdir(parents=True,exist_ok=False)
     if selected==V2:

@@ -252,6 +252,60 @@ def _merge_protocol(override):
     return protocol
 
 
+def validate_declared_roots(rows):
+    """Check supplied original roots, never infer them from prompts or names.
+
+    Issue #2: split_group is a component that may join several original group
+    roots, but one root cannot be fragmented into several components. Otherwise
+    distinct A/B/C groups (or B folds) can still share the same source. Absent
+    roots remain legacy-compatible; partial or malformed declarations fail
+    closed. Even complete declarations are not independent-source evidence.
+    """
+    declared = sum('group' in row for row in rows)
+    if not declared:
+        return {'status': 'unavailable', 'independence': 'unverified'}
+    missing = len(rows) - declared
+    malformed = sum('group' in row and
+                    (not isinstance(row['group'], str) or not row['group'].strip())
+                    for row in rows)
+    if missing or malformed:
+        raise PlanError(f'original root declarations incomplete or malformed: '
+                        f'missing_group={missing} invalid_group={malformed}; '
+                        'supply non-empty group strings on every consumed row (values withheld)')
+    components = collections.defaultdict(set)
+    for row in rows:
+        components[row['group']].add(row['split_group'])
+    fragmented = sum(len(groups) > 1 for groups in components.values())
+    if fragmented:
+        raise PlanError(f'original root isolation failed: fragmented_roots={fragmented}; '
+                        'one group must belong to only one split_group (values withheld)')
+    return {'status': 'declared_consistent', 'independence': 'unverified'}
+
+
+def validate_partition_isolation(train_rows, calibration_rows):
+    """Shared consumed-input boundary; never opens held-out/test data.
+
+    Check BEFORE filtering synthetic rows, deduplicating priors or sampling:
+    otherwise a discarded row can hide a declared train/calibration collision.
+    Repeated train IDs retain the existing prior-deduplication semantics.
+    """
+    for rows in (train_rows, calibration_rows):
+        if not isinstance(rows, list) or not rows:
+            raise PlanError('train and calibration must be non-empty row lists')
+        invalid = sum(not isinstance(row, dict) or any(
+            not isinstance(row.get(key), str) or not row[key].strip()
+            for key in ('id', 'split_group')) for row in rows)
+        if invalid:
+            raise PlanError(f'partition identity validation failed: invalid_rows={invalid}; '
+                            'id and split_group must be non-empty strings (values withheld)')
+    overlaps = {key: len({r[key] for r in train_rows} & {r[key] for r in calibration_rows})
+                for key in ('id', 'split_group')}
+    if any(overlaps.values()):
+        raise PlanError(f'train/calibration isolation failed: shared_id={overlaps["id"]} '
+                        f'shared_split_group={overlaps["split_group"]} (values withheld)')
+    return validate_declared_roots(train_rows + calibration_rows)
+
+
 def validate_rows(rows, schema):
     """Every row needs a unique non-empty string id, a non-empty string
     split_group, and legal labels on every required head. Optional heads may
@@ -371,6 +425,7 @@ def build_plan(rows, role_groups, schema, support_policy=None, protocol=None):
     policy = _merge_policy(support_policy)
     proto = _merge_protocol(protocol)
     validate_rows(rows, schema)
+    validate_declared_roots(rows)
     counts = _group_row_counts(rows)
     roles = _normalize_roles(role_groups, counts)
 

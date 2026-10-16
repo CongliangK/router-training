@@ -450,3 +450,5 @@ CUDA_VISIBLE_DEVICES='' NVIDIA_VISIBLE_DEVICES=void python prepare.py \
 命令只需标准库，只输出聚合计数和局部组别名，拒绝覆盖已有输出。
 输入格式、根来源与合并组的区别、空类/null 语义及局限见 [DATA.md](docs/DATA.md)。
 真实私有数据回放仍单列 #27 验收。
+
+按组运行的 v1/v2 预检会在采样、模型加载和产物写入前检查 train/calibration 的 ID 与 split_group 是否重叠。若声明原始根 `group`，则每个读取行都必须包含非空字符串，且一个根只能映射到一个 split_group；多个根可以合法地合并为同一组件。不完整、格式错误或跨 A/B/C、B 折分裂的根声明会直接拒绝，不重写角色。完全缺少根声明的旧输入仍受支持，但根隔离状态为不可用。声明一致不代表来源独立，此检查不读取 test。Issue #2 仍需要批准的协议和真实新 run 证据。
