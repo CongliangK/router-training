@@ -669,3 +669,5 @@ mainly supported by one historical task group. Never tune on frozen-v1.
 The CLI uses only the standard library, exports aggregate aliases, and refuses
 output overwrite. See [DATA.md](docs/DATA.md#frozen-v1-known-skew--已知偏斜)
 for the input contract and limits. Real replay remains #27.
+
+Grouped v1/v2 preflight checks the consumed train/calibration IDs and split_group identities for overlap before sampling, model loading or artifacts. Declared original `group` roots must be non-empty strings on every consumed row, and each root must map to exactly one split_group; multiple roots may legitimately share one component. Partial/malformed roots and fragmented roots (including across A/B/C or B folds) fail closed without rewriting roles. Legacy inputs with no root declarations remain supported, with root isolation unavailable. Consistent declarations do not establish independent sources; test is never read for this check. Issue #2 still requires an approved protocol and actual new-run evidence.

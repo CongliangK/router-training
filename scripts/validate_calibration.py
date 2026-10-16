@@ -27,7 +27,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from task_label_schema import LEGACY, VERSIONS, validate_supervised_rows, validate_dataset_schema, training_supplemental
-from calibration_groups import PlanError, compute_prior, preflight_roles, anonymous_summary
+from calibration_groups import PlanError, compute_prior, preflight_roles, anonymous_summary, validate_partition_isolation
 
 
 def _read_jsonl(path):
@@ -43,6 +43,7 @@ def run_validation(data_dir, roles_path, schema_version=LEGACY, supplemental_pat
         validate_dataset_schema(data_dir,schema_version)
         train_rows = _read_jsonl(data_dir / 'train.jsonl')
         calibration_rows = _read_jsonl(data_dir / 'calibration.jsonl')
+        isolation = validate_partition_isolation(train_rows, calibration_rows)
         roles_config = json.loads(roles_path.read_text())
         validate_supervised_rows(train_rows,schema_version)
         additions=training_supplemental(supplemental_paths,train_rows+calibration_rows,schema_version)
@@ -55,6 +56,7 @@ def run_validation(data_dir, roles_path, schema_version=LEGACY, supplemental_pat
                                 'excluded_synthetic': prior['excluded_synthetic'],
                                 'excluded_duplicate': prior['excluded_duplicate']}
         summary = anonymous_summary(plan)
+        summary['root_isolation'] = isolation
         summary['priors'] = priors
         summary['supplemental_rows']=len(additions)
         return True, json.dumps({'ok': True, 'plan': summary}, ensure_ascii=False, indent=2)
