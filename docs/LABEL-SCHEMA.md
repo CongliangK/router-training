@@ -17,7 +17,16 @@ an old checkpoint using six options, drop the visual logit, or rename it in plac
 - `validate_supervised_rows(rows, version)` rejects mixed versions. V2 needs a
   top-level `task_label_schema_version` and `label.label_status: "resolved"`, legal
   tier/type and binary vision. Adjudication/excluded and supplemental rows cannot
-  supply ordinary training/calibration/evaluation support.
+  supply ordinary training/calibration/evaluation support. Both the task row and
+  its label are provenance boundaries: `synthetic` or `supplemental_only` true at
+  either boundary rejects primary supervision, even when the other says false.
+  On supervised v2 rows these optional flags must be booleans; absent/false is
+  valid. Any flagged row allowed through the supplemental validation path must
+  explicitly set both top-level `synthetic: true` and `supplemental_only: true`,
+  including when the flag originated on its label. This keeps supplemental rows
+  out of primary prior counts; label-only flags cannot bypass that exclusion. Reasoned pending/excluded labels retain their flags
+  in the ledger and duplicate closure, never in supervised support. Opaque audit
+  metadata is not recursively interpreted as these flags. Legacy v1 is unchanged.
 - `reviewed_task_type(primary_action, evidence=None)` accepts
   `write_executable` → implementation, `nonprogramming_creative` → creative,
   `visual_extract` → extraction, `visual_review` → review. Visual mappings need
@@ -36,7 +45,8 @@ New v2 recovery labels explicitly carry `task_label_schema_version` and `label_s
 Prepare requires a **new separate output directory**, refuses any existing output,
 retains near-duplicate unions even through excluded tasks, and writes resolved
 splits, the adjudication ledger, schema metadata and counts. It does not change
-legacy split objectives/support gates (task-v2 + split-v2 is explicitly unsupported). No real migration
+legacy split objectives/support gates. The explicit expert-only [task-v2 + split-v2
+bridge](DATA.md#task-v2--split-v2-expert-only-bridge-18) keeps the fixed .35 cap. No real migration
 has been run by this change.
 
 ```sh
@@ -163,13 +173,14 @@ metadata stays under `label_schema`, with the semantic key, hash and ordered cla
 | v1 | split-v2 | unified/outcomes/routes/prepare-preflight | unsupported; CLI refuses before input reads/writes; APIs reject keywords |
 | v2 (explicit) | frozen-v1 algorithm | reviewed expert-only, new separate output | supported; pending/excluded ledger retained, never supervised; duplicate unions precede exclusion |
 | v2 | frozen-v1 algorithm | unified/measured/routes or prepare --preflight | unsupported; dispatcher refuses before input reads/writes |
-| v2 | split-v2 | any source | unsupported; explicit CLI refuses before reads/writes; undeclared v2 inputs fail validation before directory creation |
+| v2 | split-v2 | explicit versioned expert-only inputs | supported; new combined contract with unsuffixed files, complete v2 metadata and pending closure before exclusion |
+| v2 | split-v2 | unified/measured/routes/prepare-preflight | unsupported; CLI refuses before reads/writes |
 | v2 | already prepared expert splits | structural calibration preflight, launcher dry-run, training interfaces, score/server/metrics | supported with matching explicit semantics and complete dataset + run metadata; no actual training performed |
 | v2 | any | frozen-v1 split-report CLI/API | unsupported for aggregates and unscored/scored rows; run diagnostic unavailable, explicit metrics API retained |
 
-A split-v2 expert output can be evaluated only through an explicit future filename
-adapter: current launcher reads train.jsonl/calibration.jsonl, not split-v2 names.
-There is no automatic split-v2-to-training adapter. Existing unified bundles can
+Legacy task-v1 split-v2 uses suffixed filenames and still needs an explicit filename
+adapter for the launcher. The combined task-v2 contract uses train.jsonl/calibration.jsonl
+and both required metadata documents; this is not evidence of actual training. Existing unified bundles can
 be read by the expert-only split-v2 path; it does not migrate their shadow/evidence.
 Neither task version admits measured shadow rows into supervision or metrics.
 Source API alone remains byte-for-byte upstream; version composition is owned by
@@ -184,8 +195,8 @@ execution permissions together. Original #18 remains OPEN: six uncertain reviews
 remain external (Refs #5, #8, #24, #26, #27; calibration/loss dependencies #19–22).
 
 中文：来源版本整数与任务语义版本分离；#8 模块/API 原样保留，#18 使用独立模块和
-`task_label_schema_version`。v2 仅支持旧切分算法的专家新目录与显式后续接口；
-v2+统一/实测/prepare预检/split-v2 均在写入前拒绝，不声称真实 v2 重切成功。
+`task_label_schema_version`。v2 支持旧切分算法及显式 split-v2 的专家新目录与后续接口；
+v2+统一/实测/prepare预检仍在写入前拒绝，不声称真实 v2 重切成功。
 #8 已批准合入上游（用户提供 main `32ad23a`）；本轮集成修复的最终 SHA 必须全新独立完整红队，不能沿用批准。
 预检/运行先核对两个 v2 数据集文档的完整版本/哈希/类别顺序；调用者相对路径解析一次。
 新鲜 B 组分数严格关联后拟合，预测保留仅训练溯源；旧 v1 报告拒绝 v2 聚合/无分数/有分数输入，

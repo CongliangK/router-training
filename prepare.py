@@ -153,9 +153,14 @@ def main(argv=None):
     p.add_argument('--label-schema',choices=VERSIONS,default=LEGACY)
     a=p.parse_args(argv)
     if a.label_schema==V2:
-        if a.split_version!='frozen-v1' or a.unified or a.outcomes or a.routes or a.preflight:
-            p.error('router-label-v2 does not support split-v2, unified/measured intake or prepare preflight')
+        if a.unified or a.outcomes or a.routes or a.preflight:
+            p.error('router-label-v2 does not support unified/measured intake or prepare preflight')
         if a.data is None or a.output is None:p.error('router-label-v2 requires explicit --data and --output')
+        if a.split_version=='split-v2':
+            from split_task_v2 import prepare_task_split_v2
+            report=prepare_task_split_v2(a.data,a.output,schema_version=a.label_schema,seed=a.seed)
+            print(json.dumps(report,ensure_ascii=False,indent=2))
+            return 0 if report['status']=='feasible' else 2
         prepare(a.data,a.seed,schema_version=a.label_schema,output=a.output)
         return 0
     if a.split_version=='split-v2':

@@ -80,11 +80,11 @@ def _components(tasks,by_id,similarity):
     return [grouped[k] for k in sorted(grouped)],edges,len(parent)
 
 
-def _vector(rows):
-    return {'rows':len(rows), **{k:collections.Counter(r['label'][k] for r in rows) for k in CLASSES}}
+def _vector(rows,classes=CLASSES):
+    return {'rows':len(rows), **{k:collections.Counter(r['label'][k] for r in rows) for k in classes}}
 
 
-def _summaries(vectors,assignment,total,targets):
+def _summaries(vectors,assignment,total,targets,classes=CLASSES):
     result={};score={k:0. for k in WEIGHTS};valid=True
     for s,name in enumerate(NAMES):
         chosen=[v for v,a in zip(vectors,assignment) if a==s]
@@ -92,9 +92,9 @@ def _summaries(vectors,assignment,total,targets):
         # Integer arithmetic keeps the .35 boundary exact. Empty splits fail closed.
         passes=bool(n) and 100*largest<=35*n
         valid=valid and passes
-        counts={k:{c:sum(v[k][c] for v in chosen) for c in values} for k,values in CLASSES.items()}
+        counts={k:{c:sum(v[k][c] for v in chosen) for c in values} for k,values in classes.items()}
         props={k:{c:count/n if n else None for c,count in values.items()} for k,values in counts.items()}
-        deviation={k:{c:None if not n else props[k][c]-targets[k][c] for c in values} for k,values in CLASSES.items()}
+        deviation={k:{c:None if not n else props[k][c]-targets[k][c] for c in values} for k,values in classes.items()}
         row_deviation=n/total-RATIOS[s]
         score['row_fraction']+=abs(row_deviation)
         for k in ('tier','task_type'):
@@ -138,8 +138,13 @@ def split_v2(tasks,labels,*,seed=20261010,similarity=.88,attempts=12000):
         raise ValueError('similarity must be finite in (0,1]')
     tasks=sorted(tasks,key=lambda r:r['id']);labels=sorted(labels,key=lambda r:r['id'])
     groups,edges,roots=_components(tasks,{r['id']:r for r in labels},similarity)
-    vectors=[_vector(g) for g in groups];whole=_vector([r for group in groups for r in group]);n=len(tasks)
-    proportions={k:{c:whole[k][c]/n for c in values} for k,values in CLASSES.items()}
+    return _assign(tasks,labels,groups,edges,roots,seed,similarity,attempts)
+
+
+def _assign(tasks,labels,groups,edges,roots,seed,similarity,attempts,classes=CLASSES):
+    """Shared atomic optimizer; callers own schema validation and exclusion."""
+    vectors=[_vector(g,classes) for g in groups];whole=_vector([r for group in groups for r in group],classes);n=whole['rows']
+    proportions={k:{c:whole[k][c]/n if n else 0. for c in values} for k,values in classes.items()}
     report={'schema_version':2,'split_version':VERSION,'seed':seed,
             'input_sha256':hashlib.sha256(_canonical({'tasks':tasks,'labels':labels}).encode()).hexdigest(),
             'grouping':{'observed_roots':roots,'observed_components':len(groups),'cross_root_near_duplicate_edges':edges,
@@ -147,7 +152,7 @@ def split_v2(tasks,labels,*,seed=20261010,similarity=.88,attempts=12000):
             'targets':{'row_fractions':dict(zip(NAMES,RATIOS)),'class_proportions':proportions,
                        'max_group_share':MAX_GROUP_SHARE,'nonempty_splits':True},
             'objective_weights':dict(WEIGHTS),'limitations':list(LIMITS),'class_component_support':{},'splits':{}}
-    for k,values in CLASSES.items():
+    for k,values in classes.items():
         report['class_component_support'][k]={c:{'rows':whole[k][c], 'components':sum(v[k][c]>0 for v in vectors),
                                                 'fewer_than_three_components':sum(v[k][c]>0 for v in vectors)<3} for c in values}
     search={'method':'exhaustive' if len(groups)<=9 else 'bounded_seeded_heuristic',
@@ -155,14 +160,14 @@ def split_v2(tasks,labels,*,seed=20261010,similarity=.88,attempts=12000):
     report['search']=search
     reason=None
     if len(groups)<9:reason='At least 9 components are necessary: each of 3 nonempty splits needs at least 3 at the fixed .35 cap.'
-    if 100*max(v['rows'] for v in vectors)>35*n:
+    if n and 100*max(v['rows'] for v in vectors)>35*n:
         reason='The largest indivisible component exceeds .35 of the ENTIRE corpus; it cannot fit in any split.'
     best=None;rejected=None
-    if reason:
+    if reason and n:
         # A diagnostic only, never exported as a split or presented as feasible.
-        _,_,stats,_=_summaries(vectors,(0,)*len(groups),n,proportions)
+        _,_,stats,_=_summaries(vectors,(0,)*len(groups),n,proportions,classes)
         report['diagnostic_candidate']={'selected':False,'splits':stats}
-    else:
+    elif not reason:
         for assignment in _candidates(len(groups),seed,attempts):
             search['evaluated']+=1
             sizes=[sum(v['rows'] for v,a in zip(vectors,assignment) if a==s) for s in range(3)]
@@ -173,7 +178,7 @@ def split_v2(tasks,labels,*,seed=20261010,similarity=.88,attempts=12000):
                 if rejected is None:rejected=assignment
                 continue
             search['feasible_candidates']+=1
-            _,score,stats,terms=_summaries(vectors,assignment,n,proportions)
+            _,score,stats,terms=_summaries(vectors,assignment,n,proportions,classes)
             if best is None or (score,assignment)<(best[0],best[1]):best=(score,assignment,stats,terms)
     if best is None:
         proven=reason is not None or search['method']=='exhaustive'
@@ -182,7 +187,7 @@ def split_v2(tasks,labels,*,seed=20261010,similarity=.88,attempts=12000):
             'All atomic assignments were checked; none meets the nonempty/.35 constraints.' if proven else
             'No feasible candidate found within the search budget; infeasibility is NOT proven. Increase search/review or collect new roots; never split roots or weaken the cap.')}
         if rejected is not None:
-            _,_,stats,_=_summaries(vectors,rejected,n,proportions)
+            _,_,stats,_=_summaries(vectors,rejected,n,proportions,classes)
             report['diagnostic_candidate']={'selected':False,'splits':stats}
         return None,report
     score,assignment,stats,terms=best

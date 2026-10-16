@@ -50,13 +50,14 @@ class CompositionTests(unittest.TestCase):
                 read.assert_not_called()
 
     def test_v2_cli_all_unsupported_combinations_reject_before_reads(self):
-        groups=[['--unified'],['--outcomes','missing'],['--routes','missing'],['--preflight'],['--split-version','split-v2']]
-        for count in range(1,len(groups)+1):
-            for flags in itertools.combinations(groups,count):
-                args=['--label-schema',semantic.V2,'--data','missing','--output','missing-output',*[v for flag in flags for v in flag]]
-                with self.subTest(flags=flags),contextlib.redirect_stderr(io.StringIO()),self.assertRaises(SystemExit) as error:
-                    prepare.main(args)
-                self.assertEqual(error.exception.code,2)
+        groups=[['--unified'],['--outcomes','missing'],['--routes','missing'],['--preflight']]
+        for split in ('frozen-v1','split-v2'):
+            for count in range(1,len(groups)+1):
+                for flags in itertools.combinations(groups,count):
+                    args=['--label-schema',semantic.V2,'--split-version',split,'--data','missing','--output','missing-output',*[v for flag in flags for v in flag]]
+                    with self.subTest(split=split,flags=flags),contextlib.redirect_stderr(io.StringIO()),self.assertRaises(SystemExit) as error:
+                        prepare.main(args)
+                    self.assertEqual(error.exception.code,2)
 
     def test_v2_input_cannot_silently_enter_either_v1_splitter(self):
         tasks,experts,routes,envelope=fixture();experts[0]['task_label_schema_version']=semantic.V2

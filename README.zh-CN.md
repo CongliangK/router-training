@@ -22,13 +22,17 @@ v2 服务加载前核对 run 与 calibration 的完整 schema 元数据。
 [15 条明确虚构的 creative+vision 例子](data/synthetic-examples/labels-v2-creative-vision.jsonl)
 （旗舰 4 条）**独立于 split，仅作补充**，不是实际任务、真实独立组支持或实测改善；
 不自动导入，不属于校准/测试。v3c 配方与冻结产物不变。
+两种 v2 prepare 均检查任务及 resolved 标签：任一处 `synthetic` 或
+`supplemental_only` 为 true 即拒绝主监督；监督行这些可选标记必须为布尔值。
+有理由的待裁定/排除记录仍不计入监督支持。
 **#18 仍 OPEN**：六条真实 uncertain 证据复核、16 条 creative 盲审、真实新版本溯源、
 组支持与无泄漏验收仍不可用。本变更不代表训练/冒烟/模型加载授权。
 
 
 与已合入的 #8 集成时来源 API 与任务语义分离：`label_schema_version` 仍为来源整数 1，
 `task_label_schema_version` 才是 router-label-v1/v2。v1 冻结/统一来源及专家 split-v2 保留；
-v2 仅支持旧切分算法的专家新目录，v2+统一/实测/prepare预检/split-v2 均在写入前拒绝。
+v2 专家新目录支持旧切分算法及显式 [task-v2 + split-v2 桥接](docs/DATA.md#task-v2--split-v2-expert-only-bridge-18)；
+v2+统一/实测/prepare预检仍在写入前拒绝。
 详见[完整支持矩阵](docs/LABEL-SCHEMA.md#composed-interface-matrix-8--18--24)。
 #8 已批准并合入上游（用户提供的集成状态：main `32ad23a`）；本轮 #18 修复仍须对最终 SHA 全新独立完整红队。
 
@@ -186,7 +190,7 @@ measured 单独输出可追溯影子分区，保留 route 指纹及试验/门禁
 加 `--preflight` 可仅用 stdlib 结构预检（无 torch/模型、不切分、不写文件）；
 `--unified` 也支持纯专家入口。这些 flag 适用默认/显式 `--split-version frozen-v1`；
 split-v2 与 `--unified`、`--outcomes`、`--routes`、`--preflight` 的任意组合均在
-读写之前明确报错，绝不忽略实测输入。`--output` 仅用于 split-v2。
+读写之前明确报错，绝不忽略实测输入。split-v2 及 task-label-v2 prepare 均要求 `--output`。
 [支持的 flag 组合表](docs/DATA.md#cli-coexistence-unified-intake-vs-split-v2)。
 统一模式要求全新输出包；已有任意统一输出则所有 frozen-v1 模式（含预检/纯专家重跑）
 均拒绝。迁移或换语料/证据须新建目录仅复制输入，不自动删除数据。

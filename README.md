@@ -28,6 +28,9 @@ selected version. V2 serving requires matching run + calibration schema metadata
 The [15 clearly synthetic creative+vision examples](data/synthetic-examples/labels-v2-creative-vision.jsonl)
 (4 flagship) are **split-independent supplemental only**, not real support or
 measured improvement; no automatic ingestion or calibration/test membership.
+Both v2 preparers reject primary supervision when either a task or its resolved
+label is marked `synthetic` or `supplemental_only`; supervised flags must be
+booleans. Reasoned pending/excluded records remain outside supervised support.
 Frozen v3c recipe/artifacts are unchanged. **#18 remains OPEN**: six real uncertain
 reviews, 16 creative blinded reviews, real version provenance/group support and
 no-leak acceptance are unavailable. No training, smoke or model loading is implied.
@@ -36,8 +39,9 @@ no-leak acceptance are unavailable. No training, smoke or model loading is impli
 Integration with merged #8 keeps its intake API separate from task semantics:
 `label_schema_version` remains source integer 1; `task_label_schema_version`
 identifies router-label-v1/v2. V1 frozen/unified and expert-only split-v2 remain
-available. V2 supports expert-only new outputs with the frozen-v1 split algorithm;
-v2 + unified/measured/prepare-preflight/split-v2 fails closed before writes.
+available. V2 supports expert-only new outputs with frozen-v1 or the explicit
+[task-v2 + split-v2 bridge](docs/DATA.md#task-v2--split-v2-expert-only-bridge-18).
+V2 + unified/measured/prepare-preflight remains rejected before writes.
 See the [exact supported matrix](docs/LABEL-SCHEMA.md#composed-interface-matrix-8--18--24).
 Upstream #8 is approved/merged (main `32ad23a`, supplied integration status);
 this #18 fix still needs a fresh independent full red-team of its final SHA.
@@ -250,7 +254,7 @@ writes); `--unified` also supports expert-only intake. These flags use the
 default/explicit `--split-version frozen-v1`. Combining split-v2 with any
 `--unified`, `--outcomes`, `--routes`, or `--preflight` explicitly fails before
 input reads/writes; measured input is never silently ignored. `--output` is
-split-v2-only. See the [supported flag matrix](docs/DATA.md#cli-coexistence-unified-intake-vs-split-v2).
+required for split-v2 and task-label-v2 prepare. See the [supported flag matrix](docs/DATA.md#cli-coexistence-unified-intake-vs-split-v2).
 Unified mode requires a fresh output bundle; any existing unified output blocks
 **all frozen-v1 modes**, even preflight/expert-only reruns. Migrate or change corpus/evidence in a new directory
 with input files only; nothing is auto-deleted. Legacy-only runs still replace

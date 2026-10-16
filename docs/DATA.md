@@ -219,7 +219,7 @@ The Python APIs remain separate: `prepare(...)` supports unified/preflight;
 not unified/preflight/outcomes/routes keywords.
 
 中文：默认/显式 frozen-v1 支持统一标签、成对 outcomes/routes 及无写入预检；
-`--output` 仅适用于 split-v2。split-v2 必须显式指定输入与全新输出，且不支持
+split-v2 及 task-label-v2 prepare 均要求 `--output`。split-v2 必须显式指定输入与全新输出，且不支持
 `--unified`、`--outcomes`、`--routes`、`--preflight` 的任何组合，解析即明确报错，
 不先读输入或写文件、不忽略实测证据、不把预检变成实际切分。split-v2 只读任务和四轮
 专家输入，不核验或复制源目录的既有统一/实测输出，也不表示迁移了实测数据。
@@ -385,3 +385,58 @@ includes baseline and tuned fixed-score sensitivity; grouped-dev attaches
 aggregate-only unavailable test metrics and never reads test rows for this
 appendix. Old artifacts and the split are untouched. Real private-data replay
 and provenance verification remain separate acceptance in #27.
+
+
+## Task-v2 + split-v2 expert-only bridge (#18)
+
+```sh
+python prepare.py --label-schema router-label-v2 --split-version split-v2 \
+  --data /path/to/versioned-expert-inputs --output /path/to/new-bundle
+```
+
+The explicit bundle contract is `router-label-v2+split-v2/expert-v1`. Inputs are
+`tasks.jsonl` and four `expert-recovery-N.jsonl` files, each task and label declaring
+`task_label_schema_version: router-label-v2`. Resolved labels use the existing six
+task classes and binary `needs_vision`; question metadata calls that head `vision`.
+Source `label_schema_version`, when present, remains integer 1. Mixed/unknown
+versions, unresolved supervision and measured-shadow provenance fail closed.
+Adjudication/excluded labels require reasons and expert provenance.
+
+Unlike legacy task-v1 split-v2's suffixed filenames, a feasible combined bundle
+contains `train.jsonl`, `calibration.jsonl`, `test.jsonl`, `expert-labels.jsonl`,
+`adjudication.jsonl`, `label-schema.json` and `split-report.json`. Both metadata
+files carry the existing complete task-v2 identity; rows pass
+`validate_supervised_rows`, and the bundle passes `validate_dataset_schema`.
+The report separately declares `split_version: split-v2`, report `schema_version: 2`
+and `bundle_contract`; those namespaces do not change label semantics.
+
+All input rows, including pending/excluded-only roots, form duplicate components
+before removing supervision. Normalized identical short prompts link; different
+empty 5-gram sets alone do not. Assignment, class proportions, component support
+and the fixed 35% cap use resolved rows after closure. Whole roots/components
+remain indivisible. The report distinguishes total components before exclusion
+from observed supervised components. Empty resolved input is infeasible.
+
+Exit 0 means a feasible candidate; exit 2 means infeasible or bounded-search
+exhausted, distinguished in the report. Diagnostic-only output contains metadata,
+adjudication and the report, never supervised split/label files. All serialization
+precedes exclusive directory creation. Existing files/directories/symlinks at the
+output path are refused; parent must exist. I/O failure can leave a partial new
+bundle for inspection, never authorize reuse/overwrite. Inputs are not modified.
+
+Task-v1 split-v2 behavior remains unchanged. Both task-v2 preparers enforce the
+same primary-supervision provenance boundary. Unified/measured
+intake, prepare preflight and research-training task-v2 are still unsupported.
+Synthetic/supplemental-only flags on either tasks or resolved labels reject before
+output creation; explicit false/absent flags remain valid, malformed supervised
+flags reject. Pending/excluded flags remain in the ledger and duplicate closure,
+without contributing supervised counts. Synthetic tests
+prove software contracts, not real-label review, source independence, calibration
+quality, or candidate-model success. Issue #18 remains open for those obligations.
+
+中文：此显式专家桥接使用新契约及无后缀监督文件，附完整 v2 元数据，兼容现有数据集与
+监督行校验。全部输入先归并根/近重复连通分量，再排除待裁定/排除行；短文本规范化相等
+仍联通，不能删除桥接根。固定 35% 上限、整根隔离与确定性搜索不变，统计基于保留监督行。
+无可行切分时只写诊断/元数据/裁定记录，区分已证明不可行与搜索预算耗尽。必须写全新目录，
+不覆盖文件或符号链接、不修改输入。统一/实测/prepare 预检与研究训练桥接仍未支持。
+软件合成测试不计真实标注或校准支持，#18 保持开放。
