@@ -156,6 +156,14 @@ CRC 阶跃损失求解器仅在固定模型、交换单位等明确假设下讨�
 合成结果始终 unqualified/shadow；现有 outcomes 与生产准入门完全不变。
 
 详见[可预注册协议及外部验收台账](research/cpu-protocols-21-26.md)。
+
+Refs #43：独立的[合成快照到 OOF 草案适配](research/synthetic-oof-adapter.md)仅接五份
+显式内存快照，以及另外提供的根审核、nested 角色、模型与 epoch 声明。原 A/B/C 与
+nested 角色分别校验，不能从 group/split_group 推导审核根；审核根跨原 calibration 组件
+即拒绝，原角色覆盖仅限明确支持的数值字段。窄合成 profile 拒绝未知字段
+和 test 输入；无文件读取、训练或协议批准入口，结果始终 draft、unqualified、正式 NO-GO。
+既有训练和 OOF 入口不变。
+
 [纯合成 CPU 演示](scripts/protocol_demo.py) 不接受模型/数据路径，不训练、不执行真实候选：
 
 ```sh

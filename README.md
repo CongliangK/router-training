@@ -215,6 +215,16 @@ Synthetic outputs always remain unqualified/shadow; existing outcomes and
 production gates are unchanged.
 
 See the [preregisterable contract and external acceptance ledger](research/cpu-protocols-21-26.md).
+
+Refs #43: the isolated [synthetic snapshot-to-OOF draft adapter](research/synthetic-oof-adapter.md)
+accepts five explicit in-memory snapshots plus separate root/nested-role/model/epoch
+declarations. It validates original A/B/C and proposed nested roles without inferring
+audited roots. Audits merging distinct original calibration components are refused;
+original role overrides permit only explicit supported numeric fields. Its narrow
+synthetic profile rejects unknown fields and test inputs;
+it cannot read files, train or approve a protocol. All results remain draft,
+unqualified and formally NO-GO. Existing training/OOF entry points are unchanged.
+
 The [synthetic-only CPU demonstration](scripts/protocol_demo.py) accepts no model
 or data paths and performs no training/execution:
 
