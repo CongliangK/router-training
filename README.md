@@ -168,18 +168,28 @@ two-stage training remains a protocol, not a fake independent LM head. task_type
 remains diagnostic-only, not a production route selector. No causal creative-collapse
 or auxiliary-benefit claim is made. All three issues remain **OPEN**. See the
 [complete API, numerical rationale, matched experiment protocol and blocked acceptance
-ledger](<research/training-paths-v1.md>). The locally integrated #18 task-schema
-candidate still requires independent approval and upstream merge before publication.
-Research config remains **legacy7-v1 only**: default/explicit `--label-schema router-label-v1`
-selects the same seven questions; `router-label-v2` research is **unsupported** and
-refused before config/data/sampler/model/output work. Non-research v2 keeps its
-separate six-question, fingerprinted opt-in path. Source provenance integer
-`label_schema_version: 1` is distinct from semantic string
-`task_label_schema_version: "router-label-v1"` (or v2). Measured shadow rows never
-supply research supervision or confidence weights; old unversioned checkpoints
-retain legacy seven-question meaning. Final integration must also absorb compatible
-later policy/server changes and receive fresh red-team review; prior source reviews
-are not approval of this combined tree.
+ledger](<research/training-paths-v1.md>).
+
+Refs #18, Refs #19, Refs #20: the explicit `research-training-v2` / `task6-v2`
+bridge requires `--label-schema router-label-v2` and a reviewed copy of
+`configs/research-v2.json`. The template's zero input hashes intentionally refuse
+execution. Fill the exact SHA-256 bindings only after reviewing the synthetic or
+separately authorized inputs; drift fails closed and never rewrites the config.
+The launcher and runtime consume the same byte-snapshot validator for train,
+calibration, both schema declarations and roles. Complete question identity and
+ordered classes, expert source/status/confidence, original-root/split isolation,
+and genuine tier/vision prior support are checked before model or artifact work.
+
+This bounded v2 research contract refuses **all `--supplemental` combinations**;
+use expert-only primary inputs or the separate non-research v2 supplemental path.
+`research-training-v1` remains seven-task `legacy7-v1`; default behavior and old
+unversioned checkpoints retain their meaning. Source integer
+`label_schema_version: 1` is independent of semantic string
+`task_label_schema_version: "router-label-v2"`. Measured shadow, unresolved and
+synthetic/supplemental primary rows are refused. CPU structural success does not
+approve the evaluation protocol, training, pinned-backbone compatibility or
+production qualification. The #25 / PR #38 collection/preparation pause is unchanged.
+See the [versioned bridge contract and remaining acceptance](research/task-v2-research-bridge.md).
 
 ## CPU research protocols (Refs #21, Refs #26 — both remain open)
 

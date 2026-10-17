@@ -1,0 +1,89 @@
+{
+  "version": "research-training-v2",
+  "schema_version": "task6-v2",
+  "data_version": "synthetic-development-only-v2",
+  "evaluation_protocol": "unapproved-development-v2",
+  "training": {
+    "epochs": 2,
+    "rank": 16,
+    "lr": 0.0001,
+    "accumulation": 8,
+    "seed": 20261010,
+    "beta": 0.999,
+    "label_smoothing": 0.05,
+    "synth": false,
+    "mlp": false,
+    "fullft": false,
+    "swa": false,
+    "optimizer": "adamw"
+  },
+  "sampler": {
+    "version": "sqrt-group-v1",
+    "epoch_rows": 256,
+    "synthetic_balanced_vision_multiplier": 1.5,
+    "prior_source": "unique-natural-expert",
+    "prior_smoothing": 1.0
+  },
+  "loss": {
+    "version": "additive-la-v1",
+    "tier_tau": 1.0,
+    "vision_tau": 0.75,
+    "cost_version": "asymmetric-tier-v1",
+    "cost_matrix": [
+      [
+        0.0,
+        1.0,
+        3.0
+      ],
+      [
+        1.0,
+        0.0,
+        1.5
+      ],
+      [
+        5.0,
+        5.0,
+        0.0
+      ]
+    ],
+    "cost_lambda": 0.25,
+    "confidence_weighting": true,
+    "head_version": "heads-v1",
+    "auxiliary": "candidate"
+  },
+  "capacity": {
+    "mode": "dora",
+    "neftune_alpha": 5.0,
+    "interpolation": "unavailable"
+  },
+  "label_schema": {
+    "task_label_schema_version": "router-label-v2",
+    "question_sha256": "62454db087440fc1f299020f4d7a138f0b29f3aeed84c4de0d64fc92a089548c",
+    "classes": {
+      "tier": [
+        "fast",
+        "balanced",
+        "flagship"
+      ],
+      "vision": [
+        "no",
+        "yes"
+      ],
+      "task_type": [
+        "extraction",
+        "research",
+        "implementation",
+        "debugging",
+        "review",
+        "creative"
+      ]
+    }
+  },
+  "input_sha256": {
+    "train.jsonl": "0000000000000000000000000000000000000000000000000000000000000000",
+    "calibration.jsonl": "0000000000000000000000000000000000000000000000000000000000000000",
+    "label-schema.json": "0000000000000000000000000000000000000000000000000000000000000000",
+    "split-report.json": "0000000000000000000000000000000000000000000000000000000000000000",
+    "roles.json": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}

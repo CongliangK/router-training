@@ -123,14 +123,20 @@ smoke/训练、显存及质量均**未验证**；训练后权重插值明确不�
 可配置 task_type=0 / .3 与 literal tier-only；独立头两阶段只有明确协议，不伪装共享
 LM 头。task_type 仍只用于诊断，不参与生产路由；没有辅助损失收益或 creative 塌缩的因果
 答案。三项 issue 均保持 **OPEN**。详见[完整 API、数值依据、匹配实验协议和外部验收台账](<research/training-paths-v1.md>)。
-本地集成的 #18 task-schema 候选仍须独立批准并先合入上游，之后才可发布。
-研究配方仍**仅接受 legacy7-v1**：默认/显式 `--label-schema router-label-v1` 使用同样的
-七分类问题；研究模式的 `router-label-v2` **不支持**，在配置/数据读取、采样、模型、输出
-之前拒绝。非研究 v2 保留独立六分类、问题指纹及显式 opt-in 路径。
-来源整数 `label_schema_version: 1` 与语义字符串
-`task_label_schema_version: "router-label-v1"`（或 v2）严格分离；measured 影子行不作
-研究监督或专家置信度权重，旧无版本 checkpoint 仍为七分类。
-父级最终集成还须吸收兼容的后续 policy/server 变更并重新红队审查；原分支 PASS 不是组合树批准。
+Refs #18、Refs #19、Refs #20：显式 `research-training-v2` / `task6-v2` 桥接必须
+同时指定 `--label-schema router-label-v2`，并使用经审查的 `configs/research-v2.json`
+副本。模板的全零输入哈希故意阻止执行；仅在审查合成或另行授权的输入后填写精确
+SHA-256。输入变化会拒绝，程序不会自动改写配置。启动器与运行时复用同一字节快照
+校验器，绑定 train、calibration、两个 schema 声明与 roles；在模型/产物操作前校验
+完整问题身份和类别顺序、专家来源/状态/置信度、原始根组/切分隔离及真实 tier/vision
+先验支持。
+
+该有界 v2 研究契约拒绝**所有 `--supplemental` 组合**；仅使用专家主数据，或使用独立的
+非研究 v2 supplemental 路径。`research-training-v1` 仍是七分类 `legacy7-v1`；默认行为和
+旧无版本 checkpoint 含义不变。来源整数 `label_schema_version: 1` 与语义字符串
+`task_label_schema_version: "router-label-v2"` 分离；measured 影子、未裁定及合成/补充主行
+一律拒绝。CPU 结构通过不代表协议获批、训练授权、真实骨干兼容或生产资格；#25 / PR #38
+采集/制备暂停保持不变。详见[版本桥接契约与剩余验收](research/task-v2-research-bridge.md)。
 
 ## CPU 研究协议（Refs #21、Refs #26；两项均保持开放）
 

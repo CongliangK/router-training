@@ -85,8 +85,7 @@ def validate_dataset_schema(directory, schema_version=LEGACY):
     Legacy datasets may omit them; any explicit declaration still fails closed.
     Source label_schema_version (integer 1) remains an independent namespace.
     """
-    selected=version(schema_version);directory=Path(directory)
-    expected=metadata(selected);declarations=[]
+    selected=version(schema_version);directory=Path(directory);documents={}
     for name in ('label-schema.json','split-report.json'):
         path=directory/name
         if not path.exists():
@@ -94,6 +93,18 @@ def validate_dataset_schema(directory, schema_version=LEGACY):
             continue
         try:document=json.loads(path.read_text(encoding='utf-8'))
         except (OSError,ValueError):raise ValueError('dataset schema metadata must be readable UTF-8 JSON') from None
+        documents[name]=document
+    return validate_dataset_documents(documents,selected)
+
+
+def validate_dataset_documents(documents, schema_version=LEGACY):
+    """Validate already-read declarations, so fingerprinted readers use one snapshot."""
+    selected=version(schema_version);expected=metadata(selected);declarations=[]
+    for name in ('label-schema.json','split-report.json'):
+        if name not in documents:
+            if selected==V2:raise ValueError('v2 dataset requires both schema metadata documents')
+            continue
+        document=documents[name]
         if not isinstance(document,dict):raise ValueError('dataset schema metadata must be an object')
         if name=='split-report.json':
             if 'label_schema_version' in document:
