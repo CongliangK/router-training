@@ -164,6 +164,12 @@ nested 角色分别校验，不能从 group/split_group 推导审核根；审核
 和 test 输入；无文件读取、训练或协议批准入口，结果始终 draft、unqualified、正式 NO-GO。
 既有训练和 OOF 入口不变。
 
+Refs #44：[匹配消融清单](research/matched-ablation-manifest.md)逐 arm 重建 #43 草案，
+区分保留 vision 的 task-type-zero 与 literal tier-only，固定未声明因子及仅 fit 角色的
+完整有序采样流。逐 epoch 计划曝光/更新预算与各 head 加权曝光分列；真实参数量、
+GPU/时间/成本与训练保持 null/UNRUN。显式初始化和校准描述仍未批准，无可运行配置
+或 CLI 导出；本候选叠加依赖 #43，不表示 #43 已合入，结果始终 NO-GO。
+
 [纯合成 CPU 演示](scripts/protocol_demo.py) 不接受模型/数据路径，不训练、不执行真实候选：
 
 ```sh

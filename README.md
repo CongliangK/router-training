@@ -225,6 +225,14 @@ synthetic profile rejects unknown fields and test inputs;
 it cannot read files, train or approve a protocol. All results remain draft,
 unqualified and formally NO-GO. Existing training/OOF entry points are unchanged.
 
+Refs #44: the isolated [matched-ablation manifest](research/matched-ablation-manifest.md)
+rebuilds each synthetic arm through #43, distinguishes task-type-zero from literal
+tier-only, and fixes all undeclared factors and full ordered fit-only sampling streams.
+It reports per-epoch planned exposure/update budgets separately from weighted head
+exposure; actual parameters, GPU/time/cost and training stay null/UNRUN. Explicit
+initialization and calibration descriptions remain unapproved; no runnable config
+or CLI is exported. This candidate is stacked on #43; all results remain NO-GO.
+
 The [synthetic-only CPU demonstration](scripts/protocol_demo.py) accepts no model
 or data paths and performs no training/execution:
 
