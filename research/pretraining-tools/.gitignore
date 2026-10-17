@@ -1,0 +1,7 @@
+# Historical source archive only: generated private material is never committed.
+prepared/
+*.json
+*.jsonl
+*.log
+__pycache__/
+*.pyc
