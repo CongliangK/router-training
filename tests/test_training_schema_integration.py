@@ -130,23 +130,26 @@ class LauncherCompositionTests(unittest.TestCase):
         self.assertEqual(default,explicit);self.assertEqual(default[0],0)
         self.assertNotIn('--label-schema',default[1]);self.assertNotIn('--research-config',default[1])
 
-    def test_v2_research_refused_before_config_data_sampling_output_or_launch(self):
+    def test_v1_recipe_with_v2_refused_before_data_sampling_output_or_launch(self):
         flags=['train.py','--run','integration-v2-refused','--label-schema',ls.V2,
                '--research-config','/not-read.json','--dry-run']
-        with mock.patch.object(sys,'argv',flags),mock.patch.object(rt,'load_config',side_effect=AssertionError('NO CONFIG')) as config_read,mock.patch.object(rt,'sample_epochs',side_effect=AssertionError('NO SAMPLER')) as sampler,mock.patch.object(Path,'read_text',side_effect=AssertionError('NO INPUT')),mock.patch.object(Path,'mkdir',side_effect=AssertionError('NO OUTPUT')),mock.patch.object(launcher.subprocess,'call',side_effect=AssertionError('NO LAUNCH')) as process,contextlib.redirect_stderr(io.StringIO()) as err:
+        c=config()
+        with mock.patch.object(sys,'argv',flags),mock.patch.object(rt,'load_config',return_value=c) as config_read,mock.patch.object(rt,'sample_epochs',side_effect=AssertionError('NO SAMPLER')) as sampler,mock.patch.object(Path,'read_text',side_effect=AssertionError('NO INPUT')),mock.patch.object(Path,'mkdir',side_effect=AssertionError('NO OUTPUT')),mock.patch.object(launcher.subprocess,'call',side_effect=AssertionError('NO LAUNCH')) as process,contextlib.redirect_stderr(io.StringIO()) as err:
             with self.assertRaises(SystemExit) as exit:launcher.main()
             self.assertEqual(exit.exception.code,2)
-            self.assertIn('router-label-v2 research is unsupported',err.getvalue())
-            config_read.assert_not_called();sampler.assert_not_called();process.assert_not_called()
+            self.assertIn('unsupported research/task schema combination',err.getvalue())
+            config_read.assert_called_once();sampler.assert_not_called();process.assert_not_called()
 
 
 class RuntimeCompositionTests(unittest.TestCase):
-    def test_v2_research_fails_before_all_work_with_minimal_args(self):
+    def test_v1_recipe_with_v2_fails_before_data_work_with_minimal_args(self):
         te=f.import_train_eval_with_stubs()
         args=argparse.Namespace(label_schema=ls.V2,research_config='/not-read.json')
-        with mock.patch.object(rt,'load_config',side_effect=AssertionError('NO CONFIG')) as config_read,mock.patch.object(rt,'sample_epochs',side_effect=AssertionError('NO SAMPLER')) as sampler,mock.patch.object(te,'read_jsonl',side_effect=AssertionError('NO DATA')) as reader,mock.patch.object(te,'load_engine',side_effect=AssertionError('NO MODEL')) as model,mock.patch.object(te,'ensure_optimizer_available',side_effect=AssertionError('NO OPTIMIZER')) as optimizer,mock.patch.object(Path,'mkdir',side_effect=AssertionError('NO OUTPUT')):
-            with self.assertRaisesRegex(ValueError,'router-label-v2 research is unsupported'):te.run(args)
-            for sentinel in (config_read,sampler,reader,model,optimizer):sentinel.assert_not_called()
+        c=config()
+        with mock.patch.object(rt,'load_config',return_value=c) as config_read,mock.patch.object(rt,'sample_epochs',side_effect=AssertionError('NO SAMPLER')) as sampler,mock.patch.object(te,'read_jsonl',side_effect=AssertionError('NO DATA')) as reader,mock.patch.object(te,'load_engine',side_effect=AssertionError('NO MODEL')) as model,mock.patch.object(te,'ensure_optimizer_available',side_effect=AssertionError('NO OPTIMIZER')) as optimizer,mock.patch.object(Path,'mkdir',side_effect=AssertionError('NO OUTPUT')):
+            with self.assertRaisesRegex(ValueError,'unsupported research/task schema combination'):te.run(args)
+            config_read.assert_called_once()
+            for sentinel in (sampler,reader,model,optimizer):sentinel.assert_not_called()
 
     def test_default_and_explicit_v1_runtime_preflight_share_selected_questions(self):
         for selected in (None,ls.LEGACY):
@@ -202,12 +205,13 @@ class RepairedIntegrationGuards(unittest.TestCase):
                 self.assertFalse((ROOT/'artifacts/integration-repaired-path').exists())
             finally:os.chdir(previous)
 
-    def test_v2_research_rejects_before_even_dataset_metadata_gate(self):
+    def test_v1_recipe_with_v2_rejects_before_dataset_metadata_gate(self):
         te=f.import_train_eval_with_stubs()
         args=argparse.Namespace(label_schema=ls.V2,research_config='never-read.json')
-        with mock.patch.object(te,'validate_dataset_schema',side_effect=AssertionError('NO METADATA')) as metadata,mock.patch.object(rt,'load_config',side_effect=AssertionError('NO CONFIG')) as reader,mock.patch.object(Path,'mkdir',side_effect=AssertionError('NO OUTPUT')):
-            with self.assertRaisesRegex(ValueError,'research is unsupported'):te.run(args)
-            metadata.assert_not_called();reader.assert_not_called()
+        c=config()
+        with mock.patch.object(te,'validate_dataset_schema',side_effect=AssertionError('NO METADATA')) as metadata,mock.patch.object(rt,'load_config',return_value=c) as reader,mock.patch.object(Path,'mkdir',side_effect=AssertionError('NO OUTPUT')):
+            with self.assertRaisesRegex(ValueError,'unsupported research/task schema combination'):te.run(args)
+            metadata.assert_not_called();reader.assert_called_once()
 
     def test_nonresearch_v2_metadata_precedes_all_data_optimizer_sampler_model_output(self):
         for name in ('label-schema.json','split-report.json'):

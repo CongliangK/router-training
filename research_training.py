@@ -1,4 +1,4 @@
-"""Opt-in research recipe v1 (#19/#5); stdlib import, no data/model side effects.
+"""Opt-in versioned research recipes (#18/#19/#20); stdlib, no model effects.
 
 Legacy training deliberately does not use these helpers. Probability vectors are
 in input-row order; reports contain no prompts or row/group identities.
@@ -9,6 +9,10 @@ from pathlib import Path
 
 VERSION='research-training-v1'
 SCHEMA='legacy7-v1'
+V2_VERSION='research-training-v2'
+V2_SCHEMA='task6-v2'
+INPUT_FILES=('train.jsonl','calibration.jsonl','label-schema.json','split-report.json','roles.json')
+SUPPLEMENTAL_ERROR='research-training-v2 refuses --supplemental; use reviewed expert-only primary inputs, or the separate non-research v2 supplemental path'
 TIERS=('fast','balanced','flagship')
 VISION=('no','yes')
 TYPES=('extraction','research','implementation','debugging','review','visual','creative')
@@ -28,8 +32,16 @@ def _keys(value,expected,name):
 
 
 def validate_config(c):
-    _keys(c,{'version','schema_version','data_version','evaluation_protocol','training','sampler','loss','capacity'},'research config')
-    if c['version']!=VERSION or c['schema_version']!=SCHEMA:raise ValueError('unsupported research/schema version; #18 integration requires explicit review')
+    is_v2=isinstance(c,dict) and c.get('version')==V2_VERSION
+    _keys(c,{'version','schema_version','data_version','evaluation_protocol','training','sampler','loss','capacity'}|({'label_schema','input_sha256'} if is_v2 else set()),'research config')
+    if (c['version'],c['schema_version']) not in ((VERSION,SCHEMA),(V2_VERSION,V2_SCHEMA)):
+        raise ValueError('unsupported research/schema version; select an explicit matching versioned contract')
+    if is_v2:
+        from task_label_schema import V2, metadata
+        if c['label_schema']!=metadata(V2):raise ValueError('research v2 question fingerprint/ordered classes mismatch; review and regenerate the versioned config')
+        _keys(c['input_sha256'],INPUT_FILES,'research v2 input fingerprints')
+        if any(not isinstance(v,str) or len(v)!=64 or any(x not in '0123456789abcdef' for x in v) for v in c['input_sha256'].values()):
+            raise ValueError('research v2 input fingerprints require lowercase SHA-256 hex')
     if any(not isinstance(c[k],str) or not c[k].strip() for k in ('data_version','evaluation_protocol')):raise ValueError('data/protocol version required')
     t=c['training'];_keys(t,TRAIN_KEYS,'training')
     for k in ('epochs','rank','accumulation'):
@@ -39,8 +51,8 @@ def validate_config(c):
         if type(t[k]) is not bool:raise ValueError(f'{k} must be boolean')
     if not _number(t['lr'],1e-12) or not _number(t['beta'],0.,1.) or not _number(t['label_smoothing'],0.,1.):raise ValueError('invalid numeric training setting')
     if t['optimizer'] not in ('adamw','adamw8bit'):raise ValueError('unknown optimizer')
-    # No legacy augmentation loader on this path: synthetic rows must be explicit
-    # in the versioned train pool and marked synthetic, never in calibration.
+    # No legacy augmentation loader: v1 synthetic rows must be explicit in the
+    # train pool; v2 is primary-expert-only and refuses all supplements.
     if t['synth'] or t['swa'] or t['mlp']:raise ValueError('research v1 forbids legacy synth/SWA/MLP flags')
     s=c['sampler'];_keys(s,{'version','epoch_rows','synthetic_balanced_vision_multiplier','prior_source','prior_smoothing'},'sampler')
     if s['version']!='sqrt-group-v1' or type(s['epoch_rows']) is not int or s['epoch_rows']<1:raise ValueError('invalid sampler version/budget')
@@ -66,24 +78,106 @@ def load_config(path):return validate_config(json.loads(Path(path).read_text()))
 def config_hash(c):return hashlib.sha256(json.dumps(c,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
 
-def check_task_schema(schema_version=None):
+def check_task_schema(schema_version=None,c=None):
     """Map semantic v1 to the research recipe, never source provenance integers."""
-    from task_label_schema import LEGACY, version
-    if version(schema_version)!=LEGACY:
-        raise ValueError('router-label-v2 research is unsupported; research v1 requires legacy7-v1 (router-label-v1)')
-    return SCHEMA
+    from task_label_schema import LEGACY, V2, version
+    if c is not None:validate_config(c)
+    expected=V2 if c is not None and c['version']==V2_VERSION else LEGACY
+    if version(schema_version)!=expected:
+        raise ValueError('unsupported research/task schema combination; research-training-v1 requires router-label-v1, research-training-v2 requires explicit router-label-v2')
+    return V2_SCHEMA if expected==V2 else SCHEMA
 
 
 def check_args(c,args):
-    check_task_schema(getattr(args,'label_schema',None))
+    check_task_schema(getattr(args,'label_schema',None),c)
+    expected=getattr(args,'research_config_sha256',None)
+    if expected is not None and expected!=config_hash(c):raise ValueError('research config fingerprint changed since launcher preflight; review and repeat preflight; no config was changed')
     if getattr(args,'legacy_calibration',False) or getattr(args,'smoke',False):raise ValueError('research config cannot combine with legacy calibration or smoke; separate authorization/protocol required')
+    check_supplemental(c,getattr(args,'supplemental',None))
     for key,value in c['training'].items():
         if getattr(args,key,None)!=value:raise ValueError(f'research config/CLI mismatch: {key}')
 
 
-def check_questions(questions):
-    expected={'tier':TIERS,'vision':VISION,'task_type':TYPES}
-    if set(questions)!=set(expected) or any(tuple(questions[k]['criteria'])!=v for k,v in expected.items()):raise ValueError('research v1 requires explicit legacy7-v1 schema; do not silently mix #18')
+def check_supplemental(c,paths):
+    if c['version']==V2_VERSION and paths:raise ValueError(SUPPLEMENTAL_ERROR)
+
+
+def check_questions(questions,c=None):
+    from task_label_schema import V2, SIX_TYPES, questions_for
+    is_v2=c is not None and c['version']==V2_VERSION
+    expected={'tier':TIERS,'vision':VISION,'task_type':SIX_TYPES if is_v2 else TYPES}
+    if set(questions)!=set(expected) or any(tuple(questions[k]['criteria'])!=v for k,v in expected.items()):raise ValueError('research question order/classes differ from the selected versioned schema')
+    if is_v2:
+        validate_config(c)
+        if tuple(questions)!=tuple(expected) or questions!=questions_for(V2):raise ValueError('research v2 question identity mismatch; review and regenerate the versioned config')
+
+
+def validate_v2_experts(rows):
+    """Keep task, source and partition provenance independent and immutable."""
+    from task_label_schema import V2, validate_supervised_rows
+    from label_schema import finite_json
+    finite_json(rows,context='research v2 inputs');validate_supervised_rows(rows,V2)
+    for row in rows:
+        if any(not isinstance(row.get(k),str) or not row[k].strip() for k in ('id','prompt','group','split_group')):
+            raise ValueError('research v2 primary rows require id, prompt, group and split_group (values withheld)')
+        label=row['label']
+        # Prepared labels may omit their duplicate id, but an explicit expert
+        # identity must agree with the task it supervises; hashes cannot prove a join.
+        if 'id' in label and (not isinstance(label['id'],str) or not label['id'].strip() or label['id']!=row['id']):
+            raise ValueError('research v2 expert label id conflicts with task identity (values withheld)')
+        if label.get('label_source') not in EXPERT_SOURCES or label.get('evidence')!='prompt_only':
+            raise ValueError('research v2 requires expert_provisional/expert_reviewed prompt_only provenance')
+        if not _number(label.get('confidence'),0.,1.):raise ValueError('expert confidence must be finite in [0,1]')
+        for obj in (row,label):
+            if 'evidence' in obj and obj['evidence']!='prompt_only':
+                raise ValueError('research v2 has conflicting prompt_only evidence provenance')
+            # No explicit expert confidence_semantics marker is defined by the
+            # current source contract. In particular, measured interval coverage
+            # must never be laundered into expert certainty by copied source tags.
+            if 'confidence_semantics' in obj:
+                raise ValueError('research v2 refuses unsupported confidence_semantics provenance; review the source contract')
+            if obj.get('partition')=='measured_shadow' or any(k in obj for k in ('model','provider','historical_model','route_fingerprint','success_lb','success_rate')):
+                raise ValueError('research v2 refuses measured shadow or outcome provenance')
+            if 'label_source' in obj and obj['label_source']!=label['label_source']:
+                raise ValueError('research v2 has conflicting expert source provenance')
+            if 'label_status' in obj and obj['label_status']!='resolved':
+                raise ValueError('research v2 refuses unresolved supervision')
+
+
+def load_v2_inputs(c,data_dir,roles_path,questions,supplemental=None):
+    """Shared launcher/runtime byte snapshot; hashes bind exactly what is used.
+
+    Only train/calibration and their declarations are opened. Never test,
+    supplemental files, models or outputs. Config drift is never auto-repaired.
+    """
+    from task_label_schema import V2, validate_dataset_documents
+    from calibration_groups import validate_partition_isolation, preflight_roles, schema_from_questions, compute_prior, anonymous_summary
+    validate_config(c)
+    if c['version']!=V2_VERSION:raise ValueError('v2 input loader requires research-training-v2')
+    check_task_schema(V2,c);check_questions(questions,c);check_supplemental(c,supplemental)
+    paths={name:Path(data_dir)/name for name in INPUT_FILES};paths['roles.json']=Path(roles_path)
+    try:payloads={name:path.read_bytes() for name,path in paths.items()}
+    except OSError:raise ValueError('research v2 input cannot be read (path withheld)') from None
+    fingerprints={name:hashlib.sha256(value).hexdigest() for name,value in payloads.items()}
+    if fingerprints!=c['input_sha256']:
+        raise ValueError('research v2 input fingerprint mismatch; independently review changed inputs, then regenerate input_sha256 in a new versioned config; no config was changed')
+    try:
+        datasets={name:[json.loads(line) for line in payloads[name+'.jsonl'].decode('utf-8').splitlines() if line.strip()] for name in ('train','calibration')}
+        documents={name:json.loads(payloads[name].decode('utf-8')) for name in ('label-schema.json','split-report.json')}
+        roles=json.loads(payloads['roles.json'].decode('utf-8'))
+    except (ValueError,UnicodeError):raise ValueError('research v2 inputs must be readable UTF-8 JSON (values withheld)') from None
+    validate_dataset_documents(documents,V2)
+    isolation=validate_partition_isolation(datasets['train'],datasets['calibration'])
+    for rows in datasets.values():validate_v2_experts(rows)
+    plan=preflight_roles(datasets['calibration'],roles,schema=schema_from_questions(questions,V2),schema_version=V2)
+    prior=compute_prior(datasets['train'],'tier',plan['schema'])
+    streams,sampling=sample_epochs(datasets['train'],c,c['training']['seed'],c['training']['epochs'])
+    sampling['input_sha256']=fingerprints
+    summary={**anonymous_summary(plan),'root_isolation':isolation,'research':{
+        'config_sha256':config_hash(c),'label_schema':c['label_schema'],'sampling':sampling,
+        'qualification':'structural only; protocol unapproved, backbone/training/production unverified'}}
+    return {'datasets':datasets,'roles':roles,'plan':plan,'prior':prior,'streams':streams,
+            'sampling':sampling,'isolation':isolation,'summary':summary,'split_report':documents['split-report.json']}
 
 
 def head_weights(c):
@@ -95,6 +189,9 @@ def head_weights(c):
 
 def confidence_weight(row,enabled=True):
     label=row['label']
+    from task_label_schema import V2
+    if row.get('task_label_schema_version')==V2 or label.get('task_label_schema_version')==V2:
+        validate_v2_experts([row])  # Also fail closed for direct v2 helper calls.
     # Measured confidence is an interval coverage level, NOT expert certainty.
     if not enabled or label.get('label_source') not in EXPERT_SOURCES:return 1.
     confidence=label.get('confidence')
@@ -104,10 +201,12 @@ def confidence_weight(row,enabled=True):
 
 def sampler_plan(rows,c):
     validate_config(c)
-    # #8 source contract integer != #18 task semantics string. Reject mixed/v2
+    # #8 source contract integer != #18 task semantics string. Reject mixed
     # rows and shadow partitions even if an expert source was copied onto them.
-    from task_label_schema import LEGACY, validate_supervised_rows
-    validate_supervised_rows(rows,LEGACY)
+    from task_label_schema import LEGACY, SIX_TYPES, validate_supervised_rows
+    is_v2=c['version']==V2_VERSION;types=SIX_TYPES if is_v2 else TYPES
+    if is_v2:validate_v2_experts(rows)
+    else:validate_supervised_rows(rows,LEGACY)
     if not rows:raise ValueError('empty train pool')
     ids=[r.get('id') for r in rows]
     if any(not isinstance(i,str) or not i for i in ids) or len(set(ids))!=len(ids):raise ValueError('unique nonempty train ids required')
@@ -119,7 +218,7 @@ def sampler_plan(rows,c):
         if type(r.get('synthetic',False)) is not bool:raise ValueError('synthetic flag must be boolean')
         label=r['label']
         if label.get('label_source') not in EXPERT_SOURCES:raise ValueError('research v1 is expert-only; measured/untyped rows need #8/#18 integration')
-        if label.get('tier') not in TIERS or label.get('needs_vision') not in VISION or label.get('task_type') not in TYPES:raise ValueError('research v1 label/schema mismatch or unresolved label')
+        if label.get('tier') not in TIERS or label.get('needs_vision') not in VISION or label.get('task_type') not in types:raise ValueError('research label/schema mismatch or unresolved label')
         confidence_weight(r,c['loss']['confidence_weighting'])
     counts=collections.Counter(groups);s=c['sampler']
     natural=[1/len(rows)]*len(rows)
@@ -142,13 +241,19 @@ def sampler_plan(rows,c):
         a=s['prior_smoothing'];den=sum(mass.values())+a*len(classes)
         if not math.isfinite(den) or den<=0:raise ValueError('prior normalizer must be finite and positive')
         priors[field]={v:(mass[v]+a)/den for v in classes}
-    return {'version':s['version'],'epoch_rows':s['epoch_rows'],'group_count':len(counts),
+    plan={'version':s['version'],'epoch_rows':s['epoch_rows'],'group_count':len(counts),
             'natural_row_probabilities':natural,'target_row_probabilities':probabilities,
             'row_order_hash':hashlib.sha256(json.dumps(ids).encode()).hexdigest(),
             'priors':priors,'prior_provenance':{'source':s['prior_source'],'smoothing_pseudocount':s['prior_smoothing'],
                 'data_version':c['data_version'],'unique_nonsynthetic_expert_support':support,
                 'expected_sampler_includes_synthetic':s['prior_source']=='expected-sampler'},
             'sampling':'with replacement; row weight n_group^-0.5 times explicit synthetic exposure; no tier balance and no loss exposure multiplier'}
+    if is_v2:
+        plan['research_version']=V2_VERSION;plan['label_schema']=c['label_schema']
+        plan['row_provenance']={'source_counts':dict(collections.Counter(r['label']['label_source'] for r in rows)),
+            'primary_only':True,'resolved_only':True,'evidence':'prompt_only',
+            'ordered_rows_sha256':hashlib.sha256(json.dumps(rows,ensure_ascii=False,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()}
+    return plan
 
 
 def sample_epochs(rows,c,seed,epochs):

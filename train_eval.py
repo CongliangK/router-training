@@ -376,10 +376,11 @@ def run(args):
     # --legacy-calibration flag. No new run may silently fall back to legacy.
     selected=version(getattr(args,'label_schema',None));questions=questions_for(selected,QUESTIONS)
     research=None;research_streams=None;research_plan=None;capacity_report=None;stage_eligible=None;noise_handle=None
+    if getattr(args,'research_config_sha256',None) is not None and not getattr(args,'research_config',None):
+        raise ValueError('--research-config-sha256 requires --research-config')
     if getattr(args,'research_config',None):
         import research_training as rt
-        rt.check_task_schema(selected)
-        research=rt.load_config(args.research_config);rt.check_args(research,args);rt.check_questions(questions)
+        research=rt.load_config(args.research_config);rt.check_args(research,args);rt.check_questions(questions,research)
     if selected==V2 and getattr(args,'legacy_calibration',False):
         raise SystemExit('v2 labels cannot use archived legacy calibration')
     if selected==V2 and args.synth:
@@ -393,7 +394,13 @@ def run(args):
     if not legacy and not roles_path:raise SystemExit('New runs default to group-isolated calibration (issue #2): pass --calibration-roles with pre-registered A/B/C groups, or pass --legacy-calibration to reproduce the archived v3c recipe')
     if getattr(args,'structural_dry_run',False) and legacy:raise SystemExit('--structural-dry-run applies to grouped runs only')
     data_dir=Path(getattr(args,'data_dir',None) or ROOT/'data')
-    validate_dataset_schema(data_dir,selected)  # BEFORE optimizer/output/sampler/model
+    research_inputs=None
+    if research and research['version']==rt.V2_VERSION:
+        research_inputs=rt.load_v2_inputs(research,data_dir,roles_path,questions,supplement)
+        if getattr(args,'structural_dry_run',False):
+            print('STRUCTURAL DRY RUN (no model, no artifacts, no test access)',json.dumps(research_inputs['summary'],ensure_ascii=False),flush=True)
+            return
+    else:validate_dataset_schema(data_dir,selected)  # BEFORE optimizer/output/sampler/model
     # Issue #14b: refuse an un-runnable recipe before touching the model or
     # creating the append-only artifacts/<run>/ directory.
     ensure_optimizer_available(getattr(args,'optimizer','adamw'))
@@ -406,7 +413,8 @@ def run(args):
     # Grouped dev runs never open the test split (dev-no-test). The legacy
     # path still reads test for its historical report; the complete
     # dev-no-test rework for training is NOT satisfied by this change.
-    datasets={name:read_jsonl(data_dir/f'{name}.jsonl') for name in (['train','calibration','test'] if legacy else ['train','calibration'])}
+    datasets=(research_inputs['datasets'] if research_inputs else
+              {name:read_jsonl(data_dir/f'{name}.jsonl') for name in (['train','calibration','test'] if legacy else ['train','calibration'])})
     if not legacy:
         # Issue #2: declared split/root isolation must precede any sampling.
         from calibration_groups import validate_partition_isolation
@@ -415,17 +423,18 @@ def run(args):
     additions=training_supplemental(supplement,[r for rows in datasets.values() for r in rows],selected)
     plan=None;protocol=None;roles=None;real_train_rows=None
     if not legacy:
-        roles=json.loads(Path(roles_path).read_text())
-        plan=build_grouped_plan(datasets['calibration'],roles,selected)  # preflight BEFORE load_engine()/artifacts
+        roles=research_inputs['roles'] if research_inputs else json.loads(Path(roles_path).read_text())
+        plan=research_inputs['plan'] if research_inputs else build_grouped_plan(datasets['calibration'],roles,selected)  # preflight BEFORE load_engine()/artifacts
         protocol=plan['protocol']
         real_train_rows=datasets['train'][:]  # captured before synthetic joins: priors must come from real unique train rows only
         # Prior preflight BEFORE any model/dir work (same truth as
         # scripts/validate_calibration.py): real unique train rows must
         # support every tier class, or the run fails before it starts.
         from calibration_groups import compute_prior
-        prior=compute_prior(real_train_rows,'tier',grouped_schema(selected))
+        prior=research_inputs['prior'] if research_inputs else compute_prior(real_train_rows,'tier',grouped_schema(selected))
         if research:
-            research_streams,research_plan=rt.sample_epochs(datasets['train'],research,args.seed,args.epochs)
+            if research_inputs:research_streams,research_plan=research_inputs['streams'],research_inputs['sampling']
+            else:research_streams,research_plan=rt.sample_epochs(datasets['train'],research,args.seed,args.epochs)
         if args.structural_dry_run:
             from calibration_groups import anonymous_summary
             print('STRUCTURAL DRY RUN (no model, no artifacts, no test access)',json.dumps({**anonymous_summary(plan),'root_isolation':isolation},ensure_ascii=False),flush=True)
@@ -726,7 +735,7 @@ def run(args):
                  'Training prerequisites under the pending evaluation protocol (approved development data/protocol) are NOT yet satisfied; this run is not training-ready or production-ready.']
         if calibration['status']!='selected':
             reasons.append('No feasible tau under the registered protocol: temperatures were not calibrated and NO calibration.json was written; the server refuses to load this run rather than serve unadjusted logits.')
-        report={'run':args.run,'seed':args.seed,'mode':'grouped-dev','base_model':json.loads((ROOT/'model-manifest.json').read_text()),'training':{'epochs':args.epochs,'rank':args.rank,'lr':effective_lr,'accumulation':args.accumulation,'trainable_parameters':trainable,'optimizer_updates':updates,'seconds':time.perf_counter()-start,'history':history},'effective_config':effective,'evaluation_basis':'group-isolated development calibration (A: checkpoint selection, B: out-of-fold temperature/tau); NOT an independent evaluation','calibration':calibration,'tier_class_weights':weights,'vision_class_weights':vision_weights,'quality_gate':{'passed':False,'mode':'shadow','reasons':reasons},'split_report':json.loads((data_dir/'split-report.json').read_text())}
+        report={'run':args.run,'seed':args.seed,'mode':'grouped-dev','base_model':json.loads((ROOT/'model-manifest.json').read_text()),'training':{'epochs':args.epochs,'rank':args.rank,'lr':effective_lr,'accumulation':args.accumulation,'trainable_parameters':trainable,'optimizer_updates':updates,'seconds':time.perf_counter()-start,'history':history},'effective_config':effective,'evaluation_basis':'group-isolated development calibration (A: checkpoint selection, B: out-of-fold temperature/tau); NOT an independent evaluation','calibration':calibration,'tier_class_weights':weights,'vision_class_weights':vision_weights,'quality_gate':{'passed':False,'mode':'shadow','reasons':reasons},'split_report':research_inputs['split_report'] if research_inputs else json.loads((data_dir/'split-report.json').read_text())}
         report['quality_gate']=apply_ece_veto(report['quality_gate'],None,max_tier_ece)
         report['frozen_test_diagnostics']=(split_report(report['split_report']) if selected==LEGACY else
             {'status':'unavailable','task_label_schema_version':selected,
@@ -798,6 +807,7 @@ if __name__=='__main__':
     p.add_argument('--calibration-roles',default=None,help='JSON file with pre-registered A/B/C role groups (+ optional support_policy/protocol); required for new runs')
     p.add_argument('--structural-dry-run',action='store_true',help='grouped runs: run the CPU structural preflight (no model, no artifacts, no test access) and exit')
     p.add_argument('--research-config',default=None,help='Explicit versioned research recipe (#19/#20/#5), grouped only; CLI recipe must match exactly; not validated on actual backbone')
+    p.add_argument('--research-config-sha256',default=None,help='Launcher binding: refuse a research config changed after structural preflight')
     args=p.parse_args()
     if not args.run.replace('-','').replace('_','').isalnum():raise SystemExit('Invalid run name')
     run(args)

@@ -183,16 +183,16 @@ An independent-head/two-stage **protocol** (not an implemented mode):
 ## Concurrent integration and blocked acceptance ledger
 
 The initial research candidate was independently based on public baseline 8c04cd7.
-The task branch now locally merges the exact #18 candidate (including #8 provenance
-and #24 split gates); that upstream candidate still needs independent approval and
-merge before publication. This combined tree needs fresh red-team review, and the
-parent's final integration must absorb later policy/server changes where needed.
+Subsequent task-schema and isolation changes retain their own versioned contracts.
+New integration candidates still require fresh independent review of the exact tree.
 Research v1 remains **legacy7-v1 only**: semantic `router-label-v1` maps to this
 recipe, and default/no-version means the same legacy seven-question schema.
-`router-label-v2` research is explicitly unsupported and rejected before reading
-research config/data, sampling, model loading or output creation. Non-research v2
-retains #18's six-question/fingerprint/preload guards; old checkpoints are never
-reinterpreted. Source `label_schema_version` is integer 1, while semantic
+A v1 recipe still refuses `router-label-v2` before data/sampling/model/output work.
+Refs #18, Refs #19, Refs #20: the separate [research-training-v2 / task6-v2
+bridge](task-v2-research-bridge.md) is an explicit expert-only fingerprint-bound
+opt-in, with no supplemental combinations or protocol/training qualification.
+Non-research v2 retains #18's six-question/fingerprint/preload guards; old
+checkpoints are never reinterpreted. Source `label_schema_version` is integer 1, while semantic
 `task_label_schema_version` is a separate string. Sampler intake rejects mixed/v2
 semantics, malformed source versions and measured shadow partitions; measured
 confidence never becomes an expert weight. Existing #8 finite-UTF8/no-overwrite
@@ -218,9 +218,11 @@ External and still-blocked acceptance:
 这是 #19/#20/#5 的**显式 opt-in 公共 CPU 开发子集**，三项 issue 全部保持 OPEN；
 未加载/下载模型、未训练/真实 smoke、未调用 GPU，也没有私有数据或性能结论。
 无 `--research-config` 时保留上游默认/显式 v2 行为；冻结 v3c 与全局七分类 QUESTIONS 不变。
-本地已合入精确 #18 候选，但须该上游独立批准并先合并后才可发布，组合树还须重新红队审查。
-研究配置仅支持 legacy7-v1，对应默认/显式 router-label-v1；router-label-v2 研究模式在
-配置/数据读取、采样、模型、输出前拒绝；不从旧 checkpoint 猜测兼容。
+后续任务 schema/隔离变更保持显式版本；每个新组合树仍须独立复审。
+v1 研究配置仅支持 legacy7-v1，对应默认/显式 router-label-v1；与 router-label-v2 混用在
+数据读取、采样、模型、输出前拒绝。Refs #18、Refs #19、Refs #20 的独立
+[research-training-v2/task6-v2 桥接](task-v2-research-bridge.md) 是专家主数据与输入指纹
+绑定的显式 opt-in，不支持补充数据组合，不代表协议/训练获批，也不重解释旧 checkpoint。
 来源整数 label_schema_version 与语义字符串 task_label_schema_version 分离，measured 影子行拒绝训练。
 新数据/协议标识和 256 行预算均为示例，非批准方案。
 

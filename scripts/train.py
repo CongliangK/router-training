@@ -195,11 +195,13 @@ def main():
         sys.path.insert(0, str(ROOT))
         import research_training as rt
         try:
-            rt.check_task_schema(args.label_schema)  # before config/data/sampler/output/model work
             research = rt.load_config(args.research_config)
+            rt.check_task_schema(args.label_schema,research)  # before data/sampler/output/model work
+            rt.check_supplemental(research,args.supplemental)
             from calibration_groups import questions_from_source
             from task_label_schema import questions_for
-            rt.check_questions(questions_for(args.label_schema,questions_from_source()))
+            questions=questions_for(args.label_schema) if research['version']==rt.V2_VERSION else questions_for(args.label_schema,questions_from_source())
+            rt.check_questions(questions,research)
         except (OSError, ValueError, TypeError) as error:parser.error(str(error))
 
     if args.legacy:
@@ -236,20 +238,30 @@ def main():
         recipe.update(research['training'])
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from validate_calibration import run_validation
-    ok, text = run_validation(args.data_dir, roles_path,args.label_schema,args.supplemental)
+    research_inputs=None
+    if research and research['version']==rt.V2_VERSION:
+        try:research_inputs=rt.load_v2_inputs(research,args.data_dir,roles_path,questions,args.supplemental)
+        except (OSError, ValueError, TypeError, KeyError) as error:parser.error(str(error))
+        ok,text=True,json.dumps({'ok':True,'plan':research_inputs['summary']},ensure_ascii=False,indent=2)
+    else:ok, text = run_validation(args.data_dir, roles_path,args.label_schema,args.supplemental)
     print('Structural preflight (CPU, anonymous, no model/artifacts/test):')
     print(text, flush=True)
     if research:
         # Same sampler/prior checks as the runtime, no torch/model/test access.
         try:
-            rows = [json.loads(line) for line in (Path(args.data_dir) / 'train.jsonl').read_text().splitlines() if line.strip()]
-            streams, sampling = rt.sample_epochs(rows, research, recipe['seed'], recipe['epochs'])
+            if research_inputs:sampling=research_inputs['sampling']
+            else:
+                rows = [json.loads(line) for line in (Path(args.data_dir) / 'train.jsonl').read_text().splitlines() if line.strip()]
+                streams, sampling = rt.sample_epochs(rows, research, recipe['seed'], recipe['epochs'])
         except (OSError, ValueError, TypeError, KeyError) as error:parser.error(str(error))
         print('Research preflight (not backbone compatibility):', json.dumps({'config_sha256': rt.config_hash(research), 'sampling': sampling}, sort_keys=True), flush=True)
     command = [sys.executable, str(ROOT / 'train_eval.py'), '--run', args.run,
                '--calibration-roles', str(roles_path)]
     command.extend(recipe_flags(recipe))
-    if research:command.extend(['--research-config', str(args.research_config),'--label-schema',args.label_schema])
+    if research:
+        command.extend(['--research-config', str(args.research_config)])
+        if research['version']==rt.V2_VERSION:command.extend(['--research-config-sha256',rt.config_hash(research)])
+        if args.label_schema!=V2:command.extend(['--label-schema',args.label_schema])
     if args.label_schema==V2:
         if recipe['synth']:parser.error('v2 requires explicit --recipe {"synth": false}; legacy synth is incompatible')
         command.extend(['--label-schema',args.label_schema,'--data-dir',str(args.data_dir)])

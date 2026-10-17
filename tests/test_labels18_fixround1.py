@@ -301,7 +301,7 @@ class FrozenReportBoundaryTests(unittest.TestCase):
             env={'args':argparse.Namespace(run='INVENTED TAIL ONLY',seed=1,epochs=0,rank=8,accumulation=1),
                 'ROOT':root,'data_dir':data,'output':out,'selected':schema.V2,'LEGACY':schema.LEGACY,'effective_lr':0.,'trainable':0,
                 'updates':0,'start':0.,'history':[],'effective':{'label_schema':schema.metadata(schema.V2)},
-                'calibration':{'status':'insufficient'},'weights':{},'vision_weights':{},'max_tier_ece':None,
+                'calibration':{'status':'insufficient'},'weights':{},'vision_weights':{},'max_tier_ece':None,'research_inputs':None,
                 'json':json,'time':types.SimpleNamespace(perf_counter=lambda:0.),'apply_ece_veto':te.apply_ece_veto}
             with patch.object(te,'split_report',side_effect=AssertionError('NO FROZEN READER')) as frozen,contextlib.redirect_stdout(io.StringIO()):
                 env['split_report']=frozen;exec(compile(module,'actual-run-report-tail','exec'),env);env['tail']();frozen.assert_not_called()
@@ -309,6 +309,16 @@ class FrozenReportBoundaryTests(unittest.TestCase):
             self.assertEqual(diagnostic['status'],'unavailable');self.assertEqual(diagnostic['task_label_schema_version'],schema.V2)
             self.assertNotIn('dataset_notice',diagnostic);self.assertNotIn('row_support',diagnostic)
             self.assertEqual(metrics([prediction(pool(schema.V2)[0],schema.V2)],schema_version=schema.V2)['rows'],1)
+            # Research v2 retains its already fingerprinted split report snapshot;
+            # the report tail must not reopen a changed/deleted on-disk declaration.
+            snapshot={'label_schema':schema.metadata(schema.V2),'snapshot_fixture':True}
+            env['research_inputs']={'split_report':snapshot}
+            (data/'split-report.json').unlink()
+            with patch.object(te,'split_report',side_effect=AssertionError('NO FROZEN READER')) as frozen,contextlib.redirect_stdout(io.StringIO()):
+                env['split_report']=frozen;env['tail']();frozen.assert_not_called()
+            report=json.loads((out/'report.json').read_text())
+            self.assertEqual(report['split_report'],snapshot)
+            self.assertEqual(report['frozen_test_diagnostics']['status'],'unavailable')
 
 
 if __name__=='__main__':unittest.main()
