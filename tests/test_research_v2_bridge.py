@@ -283,6 +283,94 @@ class ResearchV2ConfigTests(FixtureCase):
 
 
 class ResearchV2InputTests(FixtureCase):
+    def test_review_f1_rejects_conflicting_expert_identity_in_both_partitions(self):
+        original=copy.deepcopy((self.train,self.calibration))
+        # Exact independent-review counterexample, re-pinned so hashes cannot
+        # hide an incorrect task/expert join. Both real entrypoints must reject.
+        for partition in (0,1):
+            self.train,self.calibration=copy.deepcopy(original)
+            (self.train,self.calibration)[partition][0]['label']['id']='different-invented-task'
+            self.persist()
+            with self.subTest(partition=partition):
+                error=self.assert_entrypoints_reject()
+                self.assertIn('identity',error)
+                self.assertNotIn('different-invented-task',error)
+
+    def test_review_f2_rejects_interval_confidence_at_both_provenance_levels(self):
+        original=copy.deepcopy((self.train,self.calibration))
+        # Four exact reviewer counterexamples, repeated with weighting disabled:
+        # interval coverage cannot become expert support or an expert weight.
+        for enabled in (True,False):
+            self.config['loss']['confidence_weighting']=enabled
+            for partition in (0,1):
+                for nested in (False,True):
+                    self.train,self.calibration=copy.deepcopy(original)
+                    row=(self.train,self.calibration)[partition][0]
+                    (row['label'] if nested else row)['confidence_semantics']='interval_confidence_level_not_sample_weight'
+                    self.persist()
+                    with self.subTest(enabled=enabled,partition=partition,nested=nested):
+                        self.assertIn('confidence_semantics',self.assert_entrypoints_reject())
+                        with self.assertRaisesRegex(ValueError,'confidence_semantics'):
+                            rt.confidence_weight(row,enabled)
+
+    def test_conflicting_outer_evidence_cannot_be_masked_by_prompt_only_label(self):
+        original=copy.deepcopy((self.train,self.calibration))
+        for enabled in (True,False):
+            self.config['loss']['confidence_weighting']=enabled
+            for partition in (0,1):
+                self.train,self.calibration=copy.deepcopy(original)
+                row=(self.train,self.calibration)[partition][0]
+                row['evidence']='acceptance_tests';self.persist()
+                with self.subTest(enabled=enabled,partition=partition):
+                    self.assertIn('evidence provenance',self.assert_entrypoints_reject())
+                    with self.assertRaisesRegex(ValueError,'evidence provenance'):
+                        rt.confidence_weight(row,enabled)
+
+    def test_optional_expert_identity_and_evidence_are_validated_without_rewriting(self):
+        for rows in (self.train,self.calibration):
+            for row in rows:
+                row['label']['id']=row['id'];row['evidence']='prompt_only'
+        self.persist();before=copy.deepcopy((self.train,self.calibration))
+        with self.guarded_reads():
+            loaded=self.load();self.runtime()
+        cli=self.launcher();self.assertEqual(cli.returncode,0,cli.stderr)
+        self.assertEqual(loaded['datasets'],dict(zip(('train','calibration'),before)))
+        for row in self.train+self.calibration:
+            self.assertAlmostEqual(rt.confidence_weight(row),.64)
+            self.assertEqual(rt.confidence_weight(row,False),1.)
+        # Absence remains supported; no id/evidence/semantics is synthesized.
+        for rows in (self.train,self.calibration):
+            for row in rows:
+                row['label'].pop('id');row.pop('evidence')
+        self.persist();before=copy.deepcopy((self.train,self.calibration))
+        with self.guarded_reads():loaded=self.load()
+        self.assertEqual(loaded['datasets'],dict(zip(('train','calibration'),before)))
+
+    def test_malformed_optional_provenance_rejects_without_changing_v1(self):
+        row=copy.deepcopy(self.train[0])
+        for value in (None,True,0,'',' ',[],{},'other-task'):
+            bad=copy.deepcopy(row);bad['label']['id']=value
+            with self.subTest(id=value),self.assertRaisesRegex(ValueError,'identity'):
+                rt.validate_v2_experts([bad])
+        for field in ('confidence_semantics','evidence'):
+            for value in (None,True,0,'','expert_annotation_certainty',[],{}):
+                for nested in (False,True):
+                    bad=copy.deepcopy(row);(bad['label'] if nested else bad)[field]=value
+                    with self.subTest(field=field,value=value,nested=nested),self.assertRaises(ValueError):
+                        rt.validate_v2_experts([bad])
+        # The focused correction does not reinterpret the legacy contract.
+        legacy=copy.deepcopy(self.train)
+        for item in legacy:
+            item['task_label_schema_version']=ls.LEGACY
+            item['label']['task_label_schema_version']=ls.LEGACY
+        config=rt.load_config(ROOT/'configs/research-v1.json')
+        expected=rt.sampler_plan(legacy,config)
+        legacy[0].update(evidence='acceptance_tests',confidence_semantics='interval_confidence_level_not_sample_weight')
+        legacy[0]['label']['id']='different-invented-task'
+        self.assertEqual(rt.sampler_plan(legacy,config),expected)
+        self.assertAlmostEqual(rt.confidence_weight(legacy[0]),.64)
+        self.assertEqual(rt.confidence_weight(legacy[0],False),1.)
+
     def test_valid_snapshot_builds_grouped_plan_priors_and_deterministic_streams(self):
         before = copy.deepcopy((self.config, self.questions, self.train, self.calibration))
         with self.guarded_reads() as reads:

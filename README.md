@@ -179,6 +179,9 @@ The launcher and runtime consume the same byte-snapshot validator for train,
 calibration, both schema declarations and roles. Complete question identity and
 ordered classes, expert source/status/confidence, original-root/split isolation,
 and genuine tier/vision prior support are checked before model or artifact work.
+Optional expert `label.id` must match its task; explicit outer evidence must agree
+with `prompt_only`. Explicit `confidence_semantics` markers are unsupported in this
+v2 expert contract and are refused, including interval coverage and disabled weighting.
 
 This bounded v2 research contract refuses **all `--supplemental` combinations**;
 use expert-only primary inputs or the separate non-research v2 supplemental path.

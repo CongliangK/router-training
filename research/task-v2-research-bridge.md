@@ -35,6 +35,16 @@ Refs #18, Refs #19, Refs #20. These issues remain open.
   outcome fields, conflicting source/status declarations and synthetic or
   supplemental flags at either task or label boundary are refused. Disabling
   confidence weighting does not disable provenance validation.
+  An optional nested `label.id` must be a nonempty string identical to the outer
+  task id. Optional outer `evidence` must also be `prompt_only`; conflicting
+  declarations are never ignored. The existing expert source schema defines no
+  explicit `confidence_semantics` marker, so any such declaration on the task or
+  label is unsupported and rejected. In particular, measured
+  `interval_confidence_level_not_sample_weight` cannot become an expert weight,
+  even if an expert source tag was copied onto it or weighting is disabled.
+  Direct weighting of explicitly v2 rows checks the same provenance contract.
+  No source metadata is removed or rewritten, and omitted optional identity or
+  evidence fields are not manufactured. This correction is v2-only.
 - PR #40 isolation checks run before sampling: train/calibration id and component
   overlap, partial or malformed root declarations, and one original root spanning
   components are rejected. Existing A/B/C role, fold and support gates remain.
@@ -94,7 +104,12 @@ Refs #18、Refs #19、Refs #20；不关闭这些研究任务。
 
 train 与 calibration 都要求显式 v2、完整 id/prompt/group/split_group、已裁定标签、
 专家 prompt_only 来源及有限置信度。measured 影子、执行结果来源、冲突声明、任何层级的
-合成/补充主数据标记均拒绝；关闭置信度权重不能绕过来源检查。保留 PR #40 的行/组件/
+合成/补充主数据标记均拒绝；关闭置信度权重不能绕过来源检查。可选嵌套 `label.id`
+必须是与任务 id 完全相同的非空字符串；显式外层 evidence 也必须为 `prompt_only`。
+现有专家来源契约没有定义 `confidence_semantics` 标记，因此任务或标签上的任何显式
+声明都拒绝；尤其不能把 measured 区间覆盖水平当作专家权重，关闭权重也不能绕过。
+直接调用显式 v2 行的置信度加权同样校验来源，不删改元数据，也不补造可选字段。
+这些修复仅作用于 v2。保留 PR #40 的行/组件/
 原始根隔离、A/B/C 角色/划折与支持门槛；一致声明不是独立性或真实性证明。tier 和 vision
 的每类都必须有唯一真实训练支持，平滑及采样先验不能补造支持。
 

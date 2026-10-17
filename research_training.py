@@ -121,10 +121,21 @@ def validate_v2_experts(rows):
         if any(not isinstance(row.get(k),str) or not row[k].strip() for k in ('id','prompt','group','split_group')):
             raise ValueError('research v2 primary rows require id, prompt, group and split_group (values withheld)')
         label=row['label']
+        # Prepared labels may omit their duplicate id, but an explicit expert
+        # identity must agree with the task it supervises; hashes cannot prove a join.
+        if 'id' in label and (not isinstance(label['id'],str) or not label['id'].strip() or label['id']!=row['id']):
+            raise ValueError('research v2 expert label id conflicts with task identity (values withheld)')
         if label.get('label_source') not in EXPERT_SOURCES or label.get('evidence')!='prompt_only':
             raise ValueError('research v2 requires expert_provisional/expert_reviewed prompt_only provenance')
         if not _number(label.get('confidence'),0.,1.):raise ValueError('expert confidence must be finite in [0,1]')
         for obj in (row,label):
+            if 'evidence' in obj and obj['evidence']!='prompt_only':
+                raise ValueError('research v2 has conflicting prompt_only evidence provenance')
+            # No explicit expert confidence_semantics marker is defined by the
+            # current source contract. In particular, measured interval coverage
+            # must never be laundered into expert certainty by copied source tags.
+            if 'confidence_semantics' in obj:
+                raise ValueError('research v2 refuses unsupported confidence_semantics provenance; review the source contract')
             if obj.get('partition')=='measured_shadow' or any(k in obj for k in ('model','provider','historical_model','route_fingerprint','success_lb','success_rate')):
                 raise ValueError('research v2 refuses measured shadow or outcome provenance')
             if 'label_source' in obj and obj['label_source']!=label['label_source']:
@@ -178,6 +189,9 @@ def head_weights(c):
 
 def confidence_weight(row,enabled=True):
     label=row['label']
+    from task_label_schema import V2
+    if row.get('task_label_schema_version')==V2 or label.get('task_label_schema_version')==V2:
+        validate_v2_experts([row])  # Also fail closed for direct v2 helper calls.
     # Measured confidence is an interval coverage level, NOT expert certainty.
     if not enabled or label.get('label_source') not in EXPERT_SOURCES:return 1.
     confidence=label.get('confidence')

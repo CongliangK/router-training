@@ -130,6 +130,8 @@ SHA-256。输入变化会拒绝，程序不会自动改写配置。启动器与�
 校验器，绑定 train、calibration、两个 schema 声明与 roles；在模型/产物操作前校验
 完整问题身份和类别顺序、专家来源/状态/置信度、原始根组/切分隔离及真实 tier/vision
 先验支持。
+可选专家 `label.id` 必须与任务 id 一致；显式外层 evidence 必须为 `prompt_only`。
+当前 v2 专家契约不支持显式 `confidence_semantics` 标记，区间覆盖语义及关闭权重时也拒绝。
 
 该有界 v2 研究契约拒绝**所有 `--supplemental` 组合**；仅使用专家主数据，或使用独立的
 非研究 v2 supplemental 路径。`research-training-v1` 仍是七分类 `legacy7-v1`；默认行为和
